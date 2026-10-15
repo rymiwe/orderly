@@ -1,0 +1,9 @@
+[Unit]
+Description=Orderly: the orderly room, where the day's business is posted
+[Service]
+ExecStart=%h/.asdf/installs/ruby/3.4.3/bin/ruby %h/code/orderly/server.rb
+EnvironmentFile=-%h/.config/ops-tab/env
+Environment=PATH=%h/.local/bin:%h/.asdf/shims:%h/.asdf/bin:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+[Install]
+WantedBy=default.target

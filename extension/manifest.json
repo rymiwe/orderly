@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Orderly",
+  "version": "0.3.0",
+  "description": "New Tab for worktrees, agents, and what is waiting on you.",
+  "chrome_url_overrides": {
+    "newtab": "newtab.html"
+  },
+  "host_permissions": [
+    "http://127.0.0.1:5180/*"
+  ]
+}
