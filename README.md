@@ -102,7 +102,7 @@ A live seat at or above 80 percent adds a needs-you row, sorted last. SuperGrok'
 
 Each row's label carries a chip per model family the pool can serve: Fable and Opus on Claude's rows, Astra and Sol on Codex, Grok on Cursor Models and SuperGrok, Fable, Opus, and Sol on Other Models, Grok Bot on its own row, Wonder full and Wonder on Muse. A dashed chip is metered (Other Models); a dotted one is builder only (SuperGrok: no hosting, no chairing). Hovering or focusing a chip previews its family, clicking pins it, and clicking again or Esc clears it. The family's rows tint and the rest dim, and a star marks the first usable pool in the family's order: live, under its cap, on a plan that has not ended, and for Claude's rows with the weekly and 5h limits open. The mapping and order are the `FAMILIES` table at the top of `newtab.js`, a view of the routing in `~/.claude/CLAUDE.md`; `seat-usage --route` still decides a launch. A `$` chip shows in amber on a Cursor row or the Grok Bot row whose pool is capped, and on the Cursor rows whenever on-demand spend this cycle is above zero. It turns red past the on-demand limit. Its popover gives on-demand spend against its limit (`on_demand`, from `cursor_ondemand` and `cursor_ondemand_limit`), which is money past both bars and not part of either. The Bot bills that same on-demand once its weekly allowance runs out.
 
-`grokbot` on this card is only that weekly allowance. Whether a local-exec machine is linked to Grok Bot is the machines card below, from a different cache. The quota card does not read it.
+`grokbot` on this card is only that weekly allowance. Whether a local-exec machine is linked to Grok Bot comes from a different cache (the machines card below), and only reaches the page as a needs-you row. The quota card does not read it.
 
 ## Machines card
 
@@ -140,7 +140,7 @@ The heartbeat log is the live install at `%USERPROFILE%\grok-bot-fleet\heartbeat
 
 Hosts in `fleet_expected` are `expected_always_on`. A heartbeat line for any other host is kept with that flag false, so offline there is normal.
 
-Each row shows the label, the effective link, the heartbeat age, and a "not always-on" chip when that flag is false. A failed read keeps the last good machines payload and sets `error`. It does not blank the other cards. Before the first readable cache, the card still lists each `fleet_expected` host as link unknown and heartbeat unknown (`cache_present: false`).
+Each row shows the label, the heartbeat age, and a "not always-on" chip when that flag is false; a stored `note` is the row's tooltip. The card does not draw the Grok Bot link (there is no link chip or indicator). The effective link is still in the payload because the needs-you rule below uses it. A failed read keeps the last good machines payload and sets `error`. It does not blank the other cards. Before the first readable cache, the card still lists each `fleet_expected` host with heartbeat unknown, and the payload has link unknown (`cache_present: false`).
 
 **Needs-you rule.** Only `expected_always_on` machines. Prefer a fresh link:
 
@@ -149,6 +149,8 @@ Each row shows the label, the effective link, the heartbeat age, and a "not alwa
 3. A fresh `connected` link does not add a row, even if the heartbeat is dead.
 
 A missing heartbeat does not satisfy rule 2. Quota rows stay last; machine rows sort with the other needs-you rows by `since`.
+
+Tests for this card: `node tests/machines_card_test.js` (the page, against a DOM stub) and `ruby tests/machines_test.rb` (the payload and the needs-you rule).
 
 ## Smoke pings
 

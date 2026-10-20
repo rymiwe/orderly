@@ -855,24 +855,13 @@
     return "hb " + formatSpan(s);
   }
 
-  function linkText(row, botEmpty) {
-    if (row.link === "connected") return "connected";
-    if (row.link === "disconnected") return "disconnected";
-    if (row.link_stale) return botEmpty ? "link unknown · bot pool empty" : "link unknown · stale";
-    return "link unknown";
-  }
-
-  function machineRow(row, botEmpty) {
-    var linkCls = "chip";
-    if (row.link === "connected") linkCls += " good";
-    else if (row.link === "disconnected") linkCls += " crit";
+  // The Grok Bot link is not drawn here; it only feeds the needs-you rows.
+  function machineRow(row) {
     var hbCls = "hb" + (row.heartbeat === "dead" ? " dead" : "");
-    var title = "Bot link is " + (row.link || "unknown") + ". Heartbeat is host evidence, not the link.";
-    if (row.link_stale && botEmpty) title += " The Bot's weekly pool is empty, so link-watch may not report until it resets.";
-    if (row.note) title += " " + row.note;
-    return el("span", { class: row.expected_always_on ? "machine" : "machine off", title: title },
+    var attrs = { class: row.expected_always_on ? "machine" : "machine off" };
+    if (row.note) attrs.title = row.note;
+    return el("span", attrs,
       el("span", { class: "label" }, row.label || row.id || ""),
-      el("span", { class: linkCls }, linkText(row, botEmpty)),
       el("span", { class: hbCls }, hbText(row)),
       row.expected_always_on ? null : el("span", { class: "chip" }, "not always-on")
     );
@@ -890,10 +879,10 @@
       return;
     }
     var rows = (c.data.machines || []).filter(function (row) {
-      return matches([row.label, row.id, row.link, row.heartbeat, row.note].filter(Boolean).join(" "), query);
+      return matches([row.label, row.id, row.heartbeat, row.note].filter(Boolean).join(" "), query);
     });
     fleetEl.replaceChildren(head, el("div", { class: "machines" }, rows.map(function (row) {
-      return machineRow(row, c.data.bot_pool_empty === true);
+      return machineRow(row);
     })));
   }
 
