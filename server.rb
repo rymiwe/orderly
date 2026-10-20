@@ -1531,17 +1531,7 @@ class OpsTabServer
   # failure. A corrupt cache raises so the last good source stays put.
   def fetch_machines
     maybe_spawn_fleet
-    shape_fleet(read_fleet_cache).merge("bot_pool_empty" => bot_pool_empty?)
-  end
-
-  # Grok Bot's link-watch is the only writer of link state, and it runs on the
-  # Bot's weekly pool. Read from the seat-usage cache the quota card uses, so
-  # the page can tell an empty pool from a reporter that broke on its own.
-  def bot_pool_empty?
-    cache = read_seat_usage_cache
-    return false unless cache
-
-    cache["bot_exhausted"] == true || (quota_num(cache, "bot_pct") || 0) >= 100
+    shape_fleet(read_fleet_cache)
   end
 
   def maybe_spawn_fleet
@@ -1618,7 +1608,7 @@ class OpsTabServer
 
   def shape_machine(id, raw, now, _cache_missing)
     raw = {} unless raw.is_a?(Hash)
-    link, link_stale = effective_fleet_link(raw, now)
+    link = effective_fleet_link(raw, now)
     hb_last = raw["heartbeat_last"]
     hb_last = nil if hb_last.nil? || hb_last.to_s.strip.empty?
     age = heartbeat_age(hb_last, now)
@@ -1629,7 +1619,6 @@ class OpsTabServer
       "label" => fleet_label(id, raw),
       "expected_always_on" => FLEET_EXPECTED.any? { |row| row["id"] == id },
       "link" => link,
-      "link_stale" => link_stale,
       "link_as_of" => raw["link_as_of"],
       "heartbeat_last" => hb_last,
       "heartbeat_age_s" => age,
@@ -1638,17 +1627,17 @@ class OpsTabServer
     }
   end
 
-  # [effective link, stale?] — stale means a real link was stored but is too old
-  # or has no timestamp. The heartbeat is not an input.
+  # Effective link for the needs-you rule; the card does not draw it. A link
+  # stored without a timestamp, or older than LINK_FRESH_S, is unknown. The
+  # heartbeat is not an input.
   def effective_fleet_link(raw, now)
     link = raw["link"].to_s
-    return ["unknown", false] unless %w[connected disconnected].include?(link)
+    return "unknown" unless %w[connected disconnected].include?(link)
 
     as_of = parse_time(raw["link_as_of"])
-    return ["unknown", true] if as_of.nil?
-    return ["unknown", true] if (now - as_of) > LINK_FRESH_S
+    return "unknown" if as_of.nil? || (now - as_of) > LINK_FRESH_S
 
-    [link, false]
+    link
   end
 
   def heartbeat_age(hb_last, now)
