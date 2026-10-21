@@ -19,7 +19,7 @@
   // still decides a launch. Claude's 5h limit rides on the weekly row.
   var FAMILIES = [
     { name: "Fable", sources: ["claude_fable", "claude_weekly", "cursor_other"] },
-    { name: "Opus", sources: ["claude_weekly", "cursor_other"] },
+    { name: "Opus", sources: ["claude_weekly", "cursor_other", "google_claudegpt_week"] },
     { name: "Astra", sources: ["codex"] },
     { name: "Sol", sources: ["codex", "cursor_other"] },
     { name: "Grok", sources: ["cursor_models", "supergrok"] },
@@ -826,9 +826,14 @@
   }
 
   // The status line's pool for each seat, which sets its hue. Grok Bot bills
-  // the Cursor seat, so it sits in Cursor's pool there too.
-  function seatVendor(id) {
-    id = String(id || "");
+  // the Cursor seat, so it sits in Cursor's pool there too. A row the server
+  // built from quartermaster's seat rows names its own vendor.
+  function seatVendor(seat) {
+    if (seat && typeof seat === "object") {
+      if (seat.vendor) return String(seat.vendor);
+      seat = seat.seat;
+    }
+    var id = String(seat || "");
     if (id.indexOf("claude") === 0) return "claude";
     if (id === "codex") return "codex";
     if (id.indexOf("cursor") === 0 || id === "grokbot") return "cursor";
@@ -838,9 +843,14 @@
   }
 
   // Same seat-to-subscription map as quota_renewal in server.rb. Grok Bot is
-  // on the Cursor bill. Muse has no renewal key and stays its own id.
-  function seatSubscription(id) {
-    id = String(id || "");
+  // on the Cursor bill. Muse has no renewal key and stays its own id. A row
+  // built from the seat rows names its own subscription.
+  function seatSubscription(seat) {
+    if (seat && typeof seat === "object") {
+      if (seat.subscription) return String(seat.subscription);
+      seat = seat.seat;
+    }
+    var id = String(seat || "");
     if (id.indexOf("claude") === 0) return "claude";
     if (id.indexOf("cursor") === 0 || id === "grokbot") return "cursor";
     if (id === "supergrok") return "grok";
@@ -892,7 +902,7 @@
     var weekly = byId.claude_weekly;
     if (!seat || seat.status !== "live" || subEnded(seat, now) || seat.exhausted) return false;
     if (!(Number(seat.percent) < 100)) return false;
-    if (seatVendor(seat.seat) === "claude" && seat !== weekly) return seatUsable(weekly, byId, now);
+    if (seatVendor(seat) === "claude" && seat !== weekly) return seatUsable(weekly, byId, now);
     if (seat.five_hour && !(Number(seat.five_hour.percent) < 100)) return false;
     return true;
   }
@@ -1097,7 +1107,7 @@
       if (name) names.push(name);
     });
     line = poolsResetThen(names);
-    vendor = seatVendor(carrier.seat);
+    vendor = seatVendor(carrier);
     return el("div", {
       class: "band-hdr" + (vendor ? " " + vendor : ""),
       title: part.getAttribute("title")
@@ -1111,9 +1121,9 @@
     var start = 0;
     var sub, end, header;
     while (start < list.length) {
-      sub = seatSubscription(list[start].seat);
+      sub = seatSubscription(list[start]);
       end = start + 1;
-      while (end < list.length && seatSubscription(list[end].seat) === sub) end++;
+      while (end < list.length && seatSubscription(list[end]) === sub) end++;
       header = bandHeader(list.slice(start, end), now);
       if (header) headers[start] = header;
       start = end;
@@ -1155,8 +1165,8 @@
     seats.forEach(function (seat, i) {
       var live = seat.status === "live";
       var absent = seat.status === "absent";
-      var vendor = seatVendor(seat.seat);
-      var nextVendor = i + 1 < seats.length ? seatVendor(seats[i + 1].seat) : null;
+      var vendor = seatVendor(seat);
+      var nextVendor = i + 1 < seats.length ? seatVendor(seats[i + 1]) : null;
       var ownHeader = headerBefore[i];
       if (ownHeader) rows.push(ownHeader);
       var rowCls = ["seat", vendor, absent ? "absent" : "", vendor !== prevVendor && !ownHeader ? "vendor-start" : "", vendor !== nextVendor ? "vendor-end" : ""].filter(Boolean).join(" ");

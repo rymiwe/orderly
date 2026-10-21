@@ -1653,22 +1653,41 @@ class OpsTabServer
     age < HEARTBEAT_LIVE_S ? "live" : "dead"
   end
 
+  # The groups and their order come from quartermaster's seat_rows, the cache's
+  # "seats" list. A group orderly knows keeps its own rows: labels, plan, the 5h
+  # track, Fable's absent state. Any other group gets one plain row per bar, so
+  # a pool seat-usage adds shows up here with no change to this file.
+  # Each runs on the server instance (instance_exec), so it reaches the private builders.
+  QUOTA_GROUPS = {
+    "cl" => ->(c, v) { [quota_claude_weekly(c, v), quota_claude_fable(c, v)] },
+    "cx" => ->(c, v) { [quota_codex(c, v)] },
+    "cu" => lambda { |c, v|
+      [quota_cursor(c, v, "cursor_models", "cursor_auto", "Cursor Models"),
+       quota_cursor(c, v, "cursor_other", "cursor_api", "Other Models"), quota_grokbot(c, v)]
+    },
+    "gk" => ->(c, v) { [quota_supergrok(c, v)] },
+    "mu" => ->(c, v) { [quota_muse(c, v)] }
+  }.freeze
+
+  # A cache with no "seats" list (none yet, or written before seat_rows) still
+  # gets the groups orderly knows, each as unknown.
+  def quota_groups(cache)
+    rows = cache.is_a?(Hash) ? cache["seats"] : nil
+    return QUOTA_GROUPS.keys.map { |id| { "id" => id } } unless rows.is_a?(Array)
+
+    rows.select { |g| g.is_a?(Hash) && g["id"].is_a?(String) }
+  end
+
   def fetch_quota
     maybe_spawn_seat_usage
     cache = read_seat_usage_cache
     verified = cache_ts_iso(cache)
-    seats = [
-      quota_claude_weekly(cache, verified),
-      quota_claude_fable(cache, verified),
-      quota_codex(cache, verified),
-      quota_cursor(cache, verified, "cursor_models", "cursor_auto", "Cursor Models"),
-      quota_cursor(cache, verified, "cursor_other", "cursor_api", "Other Models"),
-      quota_grokbot(cache, verified),
-      quota_supergrok(cache, verified),
-      quota_muse(cache, verified)
-    ]
+    seats = quota_groups(cache).flat_map do |group|
+      known = QUOTA_GROUPS[group["id"]]
+      known ? instance_exec(cache, verified, &known) : row_quota_seats(cache, verified, group)
+    end
     {
-      "seats" => seats.map { |seat| seat.merge(quota_renewal(cache, seat["seat"])).merge(quota_read(cache, seat)) },
+      "seats" => seats.map { |seat| seat.merge(quota_renewal(cache, seat["seat"], seat["subscription"])).merge(quota_read(cache, seat)) },
       "host_suggestion" => fetch_host_suggestion
     }
   end
@@ -1748,9 +1767,10 @@ class OpsTabServer
     nil
   end
 
-  def quota_renewal(cache, seat)
+  def quota_renewal(cache, seat, subscription = nil)
     sub =
-      if seat.start_with?("claude") then "claude"
+      if subscription then subscription
+      elsif seat.start_with?("claude") then "claude"
       elsif seat.start_with?("cursor") || seat == "grokbot" then "cursor"
       elsif seat == "supergrok" then "grok"
       else seat
@@ -1804,6 +1824,33 @@ class OpsTabServer
     nil
   end
 
+  # One row per bar of a group orderly has no builder for. The label is the
+  # group's vendor and the bar's own label. "vendor" sets the row's hue and
+  # "subscription" its band and read stamp.
+  def row_quota_seats(cache, verified, group)
+    head = group["label"].is_a?(String) ? group["label"] : group["id"]
+    (group["bars"].is_a?(Array) ? group["bars"] : []).select { |b| b.is_a?(Hash) }.map do |bar|
+      sub = bar["seat"].is_a?(String) ? bar["seat"] : group["id"]
+      id = bar["pool"].is_a?(String) ? bar["pool"] : "#{sub}_#{bar["name"]}"
+      label = "#{head} · #{bar["label"] || bar["name"]}"
+      pct = bar["pct"].is_a?(Numeric) ? bar["pct"] : nil
+      reset = bar["reset_ts"].is_a?(Numeric) ? iso(Time.at(bar["reset_ts"])) : nil
+      window = bar["window_s"].is_a?(Numeric) && bar["window_s"].positive? ? bar["window_s"].round : nil
+      row =
+        if bar["kind"] == "empty"
+          live_quota_seat(seat: id, label: label, percent: 100, text: "exhausted", pace: "",
+                          verified: verified, window: [reset, window]).merge("exhausted" => true)
+        elsif bar["kind"] == "seat" && pct
+          pace = quota_pace(cache, "#{id}_pace")
+          live_quota_seat(seat: id, label: label, percent: pct, text: join_text(pct_text(pct), pace_phrase(pace)),
+                          pace: pace, verified: verified, window: [reset, window])
+        else
+          unknown_quota_seat(id, label, verified)
+        end
+      row.merge("vendor" => head.downcase, "subscription" => sub)
+    end
+  end
+
   # Which seat-usage as_of stamp each rail seat comes from.
   QUOTA_AS_OF = {
     "claude_weekly" => "claude", "claude_fable" => "claude", "codex" => "chatgpt",
@@ -1814,7 +1861,7 @@ class OpsTabServer
   # seat-usage keeps a seat's last numbers when a read fails and drops its
   # as_of stamp. Without this the rail shows those old numbers as current.
   def quota_read(cache, seat)
-    key = QUOTA_AS_OF[seat["seat"]]
+    key = QUOTA_AS_OF[seat["seat"]] || seat["subscription"]
     return {} unless key && cache.is_a?(Hash)
 
     stamp = cache["as_of"].is_a?(Hash) ? cache["as_of"][key] : nil
