@@ -46,7 +46,8 @@ class QuotaTest < Minitest::Test
       "seats" => [
         { "id" => "mu", "label" => "Muse", "bars" => [] },
         { "id" => "gg", "label" => "Google",
-          "bars" => [bar("argon", "google_argon_week", 3, label: "Argon weekly"), bar("c/g", "google_claudegpt_week", nil)] },
+          "bars" => [bar("argon", "google_argon_week", 3, label: "Argon weekly").merge("families" => ["Argon"]),
+                     bar("c/g", "google_claudegpt_week", nil)] },
         { "id" => "cl", "label" => "Claude", "bars" => [] }
       ]
     )
@@ -57,6 +58,7 @@ class QuotaTest < Minitest::Test
                  argon.values_at("label", "status", "percent", "text", "vendor", "subscription", "read_failed")
     assert_equal 604_800, argon["window_s"]
     assert_equal ["Google · c/g", "unknown"], rows[2].values_at("label", "status")
+    assert_equal [["Argon"], []], rows[1..2].map { |r| r["families"] }
   end
 
   def test_a_failed_google_read_says_so

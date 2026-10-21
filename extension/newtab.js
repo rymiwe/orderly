@@ -19,7 +19,7 @@
   // still decides a launch. Claude's 5h limit rides on the weekly row.
   var FAMILIES = [
     { name: "Fable", sources: ["claude_fable", "claude_weekly", "cursor_other"] },
-    { name: "Opus", sources: ["claude_weekly", "cursor_other", "google_claudegpt_week"] },
+    { name: "Opus", sources: ["claude_weekly", "cursor_other"] },
     { name: "Astra", sources: ["codex"] },
     { name: "Sol", sources: ["codex", "cursor_other"] },
     { name: "Grok", sources: ["cursor_models", "supergrok"] },
@@ -30,6 +30,21 @@
     { name: "Wonder full", sources: ["muse"] },
     { name: "Wonder", sources: ["muse"] }
   ];
+  // FAMILIES plus the families a server row names itself (rows built from
+  // quartermaster's seat rows, whose families come from config/pools.json).
+  // A row joins the end of a family's order; a new family joins the end.
+  function families() {
+    var c = card("quota");
+    var out = FAMILIES.map(function (f) { return { name: f.name, sources: f.sources.slice() }; });
+    ((c && c.data && c.data.seats) || []).forEach(function (s) {
+      (Array.isArray(s.families) ? s.families : []).forEach(function (name) {
+        var f = out.filter(function (x) { return x.name === name; })[0];
+        if (!f) out.push(f = { name: String(name), sources: [] });
+        if (f.sources.indexOf(s.seat) === -1) f.sources.push(s.seat);
+      });
+    });
+    return out;
+  }
   var METERED = { cursor_other: true };
   // SuperGrok is builder capacity only: no hosting, no chairing (CLAUDE.md, 2026-10-08).
   var BUILDER_ONLY = { supergrok: true };
@@ -940,7 +955,7 @@
   // the first usable one in the family's order. No re-render, so hover is cheap.
   function applyFamily() {
     var name = famPreview || famPinned;
-    var fam = FAMILIES.filter(function (f) { return f.name === name; })[0];
+    var fam = families().filter(function (f) { return f.name === name; })[0];
     var now = Date.now();
     var c = card("quota");
     var byId = {};
@@ -970,7 +985,7 @@
   }
 
   function seatLabel(seat) {
-    var chips = FAMILIES.filter(function (f) { return f.sources.indexOf(seat.seat) !== -1; })
+    var chips = families().filter(function (f) { return f.sources.indexOf(seat.seat) !== -1; })
       .map(function (f) { return familyChip(f.name, seat.seat); });
     // On a capped pool, or on a Cursor row while spend this cycle is above zero:
     // the Bot resets weekly, but the spend stays on Cursor's bill.

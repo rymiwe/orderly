@@ -1847,7 +1847,8 @@ class OpsTabServer
         else
           unknown_quota_seat(id, label, verified)
         end
-      row.merge("vendor" => head.downcase, "subscription" => sub)
+      fams = bar["families"].is_a?(Array) ? bar["families"].select { |f| f.is_a?(String) && !f.empty? } : []
+      row.merge("vendor" => head.downcase, "subscription" => sub, "families" => fams)
     end
   end
 
