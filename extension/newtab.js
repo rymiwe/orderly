@@ -203,8 +203,7 @@
     return "informational";
   }
 
-  // Boundaries match needs_you_age_bucket: exactly 1d, 3d, and 7d fall in the
-  // later bucket. <1d, 1-3d, 3-7d, >7d.
+  // Exactly 1d, 3d, and 7d fall in the older bucket. <1d, 1-3d, 3-7d, >7d.
   function ageBucket(then, now) {
     var t, age, day;
     if (!then) return "age-unknown";

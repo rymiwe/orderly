@@ -184,14 +184,6 @@ NEEDS_YOU_REASON_TIER = {
   "ci_failed" => "blocked_on_me",
   "agent_exited" => "informational"
 }.freeze
-NEEDS_YOU_DAY_S = 24 * 60 * 60
-# Upper bound is exclusive, so an age of exactly 1d, 3d, or 7d falls in the
-# next bucket. Anything at or past 7d is age-gt-7d.
-NEEDS_YOU_AGE_LIMITS = [
-  [NEEDS_YOU_DAY_S, "age-lt-1d"],
-  [3 * NEEDS_YOU_DAY_S, "age-1-3d"],
-  [7 * NEEDS_YOU_DAY_S, "age-3-7d"]
-].freeze
 CODEX_WORKING_MTIME = 120
 TAIL_BYTES = 16_384
 # Ceiling for re-reading when a single JSONL record is larger than the window.
@@ -3192,77 +3184,6 @@ class OpsTabServer
     rows.sort_by! { |r| needs_you_sort_key(r) }
     attach_last_actions!(rows)
     rows
-  end
-
-  def needs_you_age_bucket(since, now = utc_now)
-    t = since.is_a?(Time) ? since : parse_time(since)
-    return "age-unknown" if t.nil? || now.nil?
-
-    # Whole seconds, so an age of exactly 1d, 3d, or 7d is not nudged into the
-    # younger bucket by a float remainder.
-    age = now.to_i - t.to_i
-    NEEDS_YOU_AGE_LIMITS.each do |limit, name|
-      return name if age < limit
-    end
-    "age-gt-7d"
-  end
-
-  def format_needs_you_age(since, now = utc_now)
-    t = since.is_a?(Time) ? since : parse_time(since)
-    return "" if t.nil? || now.nil?
-
-    seconds = [0, now.to_i - t.to_i].max
-    days = seconds / NEEDS_YOU_DAY_S
-    hours = (seconds % NEEDS_YOU_DAY_S) / 3600
-    mins = (seconds % 3600) / 60
-    return "#{days}d" if days >= 2
-    return hours.positive? ? "#{days}d #{hours}h" : "#{days}d" if days >= 1
-    return mins.positive? ? "#{hours}h #{mins}m" : "#{hours}h" if hours >= 1
-
-    "#{mins}m"
-  end
-
-  def html_escape(value)
-    CGI.escapeHTML(value.to_s)
-  end
-
-  # Non-empty tiers only. Counts are the rows in that tier.
-  def render_needs_you_html(rows, now: utc_now)
-    prepared = rows.map do |row|
-      copy = row.dup
-      copy["tier"] = needs_you_tier(copy)
-      copy
-    end
-    prepared.sort_by! { |row| needs_you_sort_key(row) }
-    blocks = NEEDS_YOU_TIER_ORDER.filter_map do |tier|
-      items = prepared.select { |row| row["tier"] == tier }
-      next if items.empty?
-
-      label = "#{NEEDS_YOU_TIER_LABEL[tier]} · #{items.length}"
-      lis = items.map { |row| render_needs_you_li(row, now) }.join
-      %(<div class="tier" data-tier="#{html_escape(tier)}"><div class="group">#{html_escape(label)}</div><ol>#{lis}</ol></div>)
-    end
-    head = %(<div class="head"><span class="eyebrow">Needs you · #{prepared.length}</span><span class="note">priority, then oldest</span></div>)
-    %(<div class="needs">#{head}#{blocks.join}</div>)
-  end
-
-  def render_needs_you_li(row, now)
-    bucket = needs_you_age_bucket(row["since"], now)
-    age = format_needs_you_age(row["since"], now)
-    chip = case row["kind"]
-           when "pr" then %( <span class="chip">gh</span>)
-           when "linear" then %( <span class="chip">linear</span>)
-           when "machine" then %( <span class="chip">fleet</span>)
-           else ""
-           end
-    detail = row["detail"].to_s
-    why = detail.empty? ? "" : %(<br><span class="why">#{html_escape(detail)}</span>)
-    action = if row["action_url"].to_s.empty?
-      %(<span class="act">#{html_escape(row["action"])}</span>)
-    else
-      %(<a class="act" href="#{html_escape(row["action_url"])}">#{html_escape(row["action"])}</a>)
-    end
-    %(<li data-id="#{html_escape(row["id"])}"><span class="id">#{html_escape(row["id"])}#{chip}</span><span>#{html_escape(row["title"])}#{why}</span><span class="age #{bucket}">#{html_escape(age)}</span>#{action}</li>)
   end
 
   # Prefer a fresh bot link. Heartbeat is host evidence and never stands in for
