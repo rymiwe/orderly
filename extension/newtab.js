@@ -468,6 +468,7 @@
     var snooze = {};
     ((c && c.pending_keys) || []).forEach(function (k) { pending[String(k)] = true; });
     Object.keys(optimisticPending).forEach(function (k) { pending[k] = true; });
+    ((c && c.snoozed_keys) || []).forEach(function (k) { snooze[String(k)] = true; });
     Object.keys(optimisticSnooze).forEach(function (k) { snooze[k] = true; });
     return { pending: pending, snooze: snooze };
   }
@@ -595,7 +596,10 @@
     });
     shown = rows.filter(function (r) { return matches(needHay(r), query); });
     pendingN = mapSize(maps.pending);
-    snoozedN = ((c && c.snoozed) || 0) + mapSize(maps.snooze);
+    // Union by clear_key. A poll that already read the saved overlay reports
+    // that key while the optimistic snooze is still held; adding the count
+    // on top would show one row as two.
+    snoozedN = mapSize(maps.snooze);
     countLabel = "Needs you · " + shown.length;
     headRight = "priority, then oldest";
     if (staleBits(c).length) headRight = staleBits(c).join(" · ");

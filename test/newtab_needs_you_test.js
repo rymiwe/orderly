@@ -171,7 +171,8 @@ async function renderNeeds(rows, extra, options) {
             error: null,
             data: rows,
             pending_keys: extra.pending_keys || [],
-            snoozed: extra.snoozed || 0
+            snoozed: extra.snoozed || 0,
+            snoozed_keys: extra.snoozed_keys || []
           }
         }
       })
@@ -396,7 +397,11 @@ test("renders snoozed and pending state without counting hidden rows in a tier",
       kind: "pr",
       clear_key: "github:acme/widgets#9:team"
     }
-  ], { pending_keys: ["github:acme/widgets#4:review"], snoozed: 2 });
+  ], {
+    pending_keys: ["github:acme/widgets#4:review"],
+    snoozed: 2,
+    snoozed_keys: ["github:acme/widgets#1:review", "github:acme/widgets#2:review"]
+  });
   assert.equal(needs.textContent.includes("Hidden ask"), false);
   assert.ok(needs.textContent.includes("Visible ask"));
   assert.ok(needs.textContent.includes("platform asked for a review"));
@@ -580,4 +585,85 @@ test("a poll started before the snooze commits does not clear it", async () => {
   const absent = await pollStraddlingSave(clickSnooze, "absent", "snooze-mark");
   assert.equal(absent.textContent.includes("Review the latch"), false, "absent ask should stay gone");
   assert.equal(absent.all().some((n) => n.className === "snooze-mark"), false);
+});
+
+// snooze click → GET starts → server saves the overlay → that GET resolves
+// reporting snoozed:1 and the clear_key while the optimistic snooze is held.
+async function snoozeThenSavedPoll(serverKeys, keepRow) {
+  const key = "github:acme/widgets#4:review";
+  const rowData = {
+    tier: "direct_ask",
+    id: "#4",
+    title: "Review the latch",
+    since: isoBefore(3 * 60 * 60 * 1000),
+    kind: "pr",
+    clear_key: key,
+    action: "review",
+    action_url: "https://example.test/acme/widgets/4"
+  };
+  const events = [];
+  let gets = 0;
+  let releasePost;
+  let releaseMid;
+  function cards(data, snoozedKeys) {
+    return {
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({
+        cards: {
+          needs_you: {
+            fetched_at: new Date(NOW).toISOString(),
+            error: null,
+            data,
+            pending_keys: [],
+            snoozed: snoozedKeys.length,
+            snoozed_keys: snoozedKeys
+          }
+        }
+      })
+    };
+  }
+  const needs = await renderNeeds([rowData], {}, {
+    fetch: (_url, opts) => {
+      if (opts && opts.method === "POST") {
+        return new Promise((resolve) => {
+          releasePost = () => {
+            events.push("post-ok");
+            resolve({ ok: true, status: 204, json: () => Promise.resolve({}) });
+          };
+        });
+      }
+      gets += 1;
+      if (gets === 1) return Promise.resolve(cards([rowData], []));
+      events.push("get-start");
+      return new Promise((resolve) => {
+        releaseMid = () => {
+          events.push("get-resolve");
+          resolve(cards(keepRow ? [rowData] : [], serverKeys));
+        };
+      });
+    }
+  });
+  clickSnooze(row(needs, "Review the latch"));
+  assert.equal(needs.textContent.includes("Review the latch"), false);
+  needs._fire("visibilitychange");
+  assert.equal(gets, 2);
+  assert.deepEqual(events, ["get-start"]);
+  releasePost();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(events, ["get-start", "post-ok"]);
+  releaseMid();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(events, ["get-start", "post-ok", "get-resolve"]);
+  assert.equal(needs.textContent.includes("Review the latch"), false);
+  return needs;
+}
+
+test("a saved snooze poll counts the union of server and optimistic keys", async () => {
+  const key = "github:acme/widgets#4:review";
+  const same = await snoozeThenSavedPoll([key], false);
+  assert.equal(same.all().find((n) => n.className === "snooze-mark").textContent, "snoozed · 1");
+
+  const other = await snoozeThenSavedPoll(["github:acme/widgets#8:review"], true);
+  assert.equal(other.all().find((n) => n.className === "snooze-mark").textContent, "snoozed · 2");
 });

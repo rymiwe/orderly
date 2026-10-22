@@ -3792,9 +3792,10 @@ class OpsTabServer
     # Overlay GC stays off in that case too.
     pending_keys = []
     snoozed = 0
+    snoozed_keys = []
     if names.any? { |n| !source_data(n).nil? }
       raw = build_needs_you(sessions, prs, linear, quota, rows, source_data("machines"))
-      data, pending_keys, snoozed = apply_needs_you_overlay(raw, needs_you_availability)
+      data, pending_keys, snoozed, snoozed_keys = apply_needs_you_overlay(raw, needs_you_availability)
     else
       data = nil
     end
@@ -3807,7 +3808,10 @@ class OpsTabServer
       "fetched_at" => names.filter_map { |n| source(n)["fetched_at"] }.min,
       "error" => error,
       "pending_keys" => pending_keys,
-      "snoozed" => snoozed
+      "snoozed" => snoozed,
+      # clear_keys only, so the page can union this list with an optimistic
+      # snooze. /needs_you/summary stays counts-only and does not copy it.
+      "snoozed_keys" => snoozed_keys
     }
   end
 
@@ -3873,9 +3877,10 @@ class OpsTabServer
     NEEDS_YOU_SNAPSHOT.key?(prefix) ? prefix : nil
   end
 
-  # Returns [visible_rows, entries, pending_keys, snoozed].
-  # An entry is dropped for absence only when its own source is loaded.
-  # While that source is missing, the entry is kept and no clock rule runs.
+  # Returns [visible_rows, entries, pending_keys, snoozed_count, snoozed_keys].
+  # snoozed_keys are clear_keys only. An entry is dropped for absence only
+  # when its own source is loaded. While that source is missing, the entry
+  # is kept and no clock rule runs.
   def project_overlay(raw_rows, entries, availability, now = utc_now)
     raw_by_key = {}
     raw_rows.each do |row|
@@ -3885,7 +3890,7 @@ class OpsTabServer
       raw_by_key[key] = row
     end
     pending_keys = []
-    snoozed = 0
+    snoozed_keys = []
     hidden = {}
     kept = {}
     entries.each do |key, entry|
@@ -3917,23 +3922,23 @@ class OpsTabServer
         next if until_at.nil? || now >= until_at
 
         hidden[key] = true
-        snoozed += 1
+        snoozed_keys << key
         kept[key] = entry
       when "until_change"
         next if until_change_due?(entry, row, now)
 
         hidden[key] = true
-        snoozed += 1
+        snoozed_keys << key
         kept[key] = entry
       end
     end
     visible = raw_rows.reject { |row| hidden[row["clear_key"].to_s] }
-    [visible, kept, pending_keys, snoozed]
+    [visible, kept, pending_keys, snoozed_keys.length, snoozed_keys]
   end
 
   def apply_needs_you_overlay(raw_rows, availability, now = utc_now)
     before = overlay_entries
-    visible, kept, pending_keys, snoozed = project_overlay(raw_rows, before, availability, now)
+    visible, kept, pending_keys, snoozed, snoozed_keys = project_overlay(raw_rows, before, availability, now)
     @overlay = { "version" => 1, "entries" => kept }
     begin
       save_overlay if JSON.generate(before) != JSON.generate(kept)
@@ -3941,7 +3946,7 @@ class OpsTabServer
       warn "needs-you overlay write failed: #{e.message}"
       @overlay = { "version" => 1, "entries" => before }
     end
-    [visible, pending_keys, snoozed]
+    [visible, pending_keys, snoozed, snoozed_keys]
   end
 
   def age_seconds(since, now)
