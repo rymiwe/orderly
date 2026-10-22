@@ -107,6 +107,29 @@ PRUNE_AFTER = 14 * 24 * 60 * 60
 GROK_MAX_AGE = 7 * 24 * 60 * 60
 GROK_NEEDS_YOU_MAX_AGE = 24 * 60 * 60
 NEEDS_YOU_PR_MAX_AGE = 14 * 24 * 60 * 60
+# Highest priority first. Age only orders rows inside a tier. team_ask stays
+# in the order so the section can show it; no needs-you row is a team ask
+# today (those PRs stay on the PR card).
+NEEDS_YOU_TIER_ORDER = %w[direct_ask blocked_on_me team_ask informational].freeze
+NEEDS_YOU_TIER_LABEL = {
+  "direct_ask" => "Direct ask",
+  "blocked_on_me" => "Blocked on me",
+  "team_ask" => "Team ask",
+  "informational" => "Informational"
+}.freeze
+# Every needs-you `kind` maps here. A reason overrides the kind when one kind
+# mixes a person asking you with something that is not an ask.
+NEEDS_YOU_KIND_TIER = {
+  "pr" => "direct_ask",
+  "linear" => "direct_ask",
+  "agent" => "blocked_on_me",
+  "machine" => "informational",
+  "quota" => "informational"
+}.freeze
+NEEDS_YOU_REASON_TIER = {
+  "ci_failed" => "blocked_on_me",
+  "agent_exited" => "informational"
+}.freeze
 CODEX_WORKING_MTIME = 120
 TAIL_BYTES = 16_384
 # Ceiling for re-reading when a single JSONL record is larger than the window.
@@ -183,6 +206,7 @@ PR_GQL_FIELDS = <<-'GQL'.freeze
       reviewThreads(first:50){nodes{isResolved comments(last:1){nodes{author{login} createdAt url}}}}
       latestReviews(first:20){nodes{author{login} state submittedAt}}
       reviewRequests(first:10){nodes{requestedReviewer{__typename ... on User{login} ... on Team{name slug}}}}
+      timelineItems(last:20, itemTypes:[REVIEW_REQUESTED_EVENT, READY_FOR_REVIEW_EVENT]){nodes{__typename ... on ReviewRequestedEvent{createdAt requestedReviewer{__typename ... on User{login} ... on Team{name slug}}} ... on ReadyForReviewEvent{createdAt}}}
 GQL
 LINEAR_QUERY = <<-'GQL'.freeze
 { viewer { id name
@@ -2588,11 +2612,15 @@ class OpsTabServer
       row["since"] = since
       row["requested_by"] = nil
       row["requested_at"] = nil
+      row["ready_at"] = nil
     else
+      requested_at, ready_at = review_request_times(gql)
+      since, = pick_review_since(requested_at, ready_at, updated, created)
       row["group"] = nil
       row["requested_by"] = author
-      row["requested_at"] = nil
-      row["since"] = created
+      row["requested_at"] = requested_at
+      row["ready_at"] = ready_at
+      row["since"] = since
     end
     row
   end
@@ -2804,13 +2832,84 @@ class OpsTabServer
     { "path" => path, "ok" => false, "status" => nil, "ms" => ms }
   end
 
+  def timeline_nodes(gql)
+    nodes = gql&.dig("timelineItems", "nodes")
+    return [] unless nodes.is_a?(Array)
+
+    nodes.select { |node| node.is_a?(Hash) }
+  end
+
+  def latest_timestamp(times)
+    times.compact.reject { |t| t.to_s.empty? }.max_by { |t| parse_time(t) || Time.at(0) }
+  end
+
+  def user_reviewer?(reviewer)
+    typename = reviewer["__typename"].to_s
+    typename.empty? || typename == "User"
+  end
+
+  # `last:20` on the two event types. Events whose reviewer is missing are
+  # ignored: GitHub sometimes leaves requestedReviewer null, and that event
+  # cannot be told apart from a request for someone else.
+  def latest_review_requested_at(gql, who)
+    times = timeline_nodes(gql).filter_map do |node|
+      next unless node["__typename"] == "ReviewRequestedEvent"
+
+      reviewer = node["requestedReviewer"]
+      next unless reviewer.is_a?(Hash)
+
+      keep = case who
+             when :user then user_reviewer?(reviewer) && me?(reviewer["login"])
+             when :team then reviewer["__typename"].to_s == "Team"
+             else false
+             end
+      next unless keep
+
+      node["createdAt"]
+    end
+    latest_timestamp(times)
+  end
+
+  def latest_ready_for_review_at(gql)
+    times = timeline_nodes(gql).filter_map do |node|
+      next unless node["__typename"] == "ReadyForReviewEvent"
+
+      node["createdAt"]
+    end
+    latest_timestamp(times)
+  end
+
+  def review_request_times(gql)
+    requested = if direct_review_requested?(gql)
+      latest_review_requested_at(gql, :user)
+    elsif team_review_requested?(gql)
+      latest_review_requested_at(gql, :team)
+    end
+    [requested, latest_ready_for_review_at(gql)]
+  end
+
+  # Request time, then the ready-for-review event, then the PR's last update.
+  # Creation time is only used when none of those exist, so opening the PR is
+  # not treated as the moment someone asked.
+  def pick_review_since(requested_at, ready_at, updated_at, created_at)
+    if !requested_at.to_s.empty?
+      [requested_at, "review_requested"]
+    elsif !ready_at.to_s.empty?
+      [ready_at, "ready_for_review"]
+    elsif !updated_at.to_s.empty?
+      [updated_at, "updated_at"]
+    else
+      [created_at, "created_at"]
+    end
+  end
+
   def pr_needs_you_expired?(row)
     return false unless row["kind"] == "pr"
 
-    # Review-request rows carry the PR's creation time as `since`, because
-    # GraphQL does not expose when the request was made. Measuring the cap
-    # against that hides a review requested today on an older PR, so age those
-    # rows by the PR's last update instead.
+    # The cap is the PR's last update (`expires_from`), not `since`. `since`
+    # is when the review was requested or the PR was marked ready, which would
+    # hide a request made today on an older PR and would keep a quiet PR whose
+    # request is recent.
     t = parse_time(row["expires_from"] || row["since"])
     return false if t.nil?
 
@@ -2828,12 +2927,33 @@ class OpsTabServer
     false
   end
 
+  def needs_you_tier(row)
+    reason = row["reason"].to_s
+    return NEEDS_YOU_REASON_TIER[reason] if NEEDS_YOU_REASON_TIER.key?(reason)
+
+    kind = row["kind"].to_s
+    return NEEDS_YOU_KIND_TIER[kind] if NEEDS_YOU_KIND_TIER.key?(kind)
+
+    explicit = row["tier"].to_s
+    return explicit if NEEDS_YOU_TIER_ORDER.include?(explicit)
+
+    "informational"
+  end
+
+  def needs_you_sort_key(row)
+    rank = NEEDS_YOU_TIER_ORDER.index(row["tier"].to_s)
+    rank = NEEDS_YOU_TIER_ORDER.length if rank.nil?
+    since = row["since"].to_s
+    [rank, since.empty? ? "9999" : since]
+  end
+
   def build_needs_you(sessions, prs, linear, quota, wt_rows, machines)
     rows = needs_you_from_agents(sessions) + needs_you_from_prs(prs, wt_rows) +
-      needs_you_from_linear(linear, wt_rows) + needs_you_from_machines(machines)
+      needs_you_from_linear(linear, wt_rows) + needs_you_from_machines(machines) +
+      needs_you_from_quota(quota)
     rows.reject! { |r| pr_needs_you_expired?(r) }
-    rows.sort_by! { |r| r["since"] || "9999" }
-    rows.concat(needs_you_from_quota(quota))
+    rows.each { |r| r["tier"] = needs_you_tier(r) }
+    rows.sort_by! { |r| needs_you_sort_key(r) }
     rows
   end
 
@@ -2853,6 +2973,7 @@ class OpsTabServer
       if machine["link"] == "disconnected"
         {
           "kind" => "machine",
+          "reason" => "machine_link",
           "id" => label,
           "title" => "#{label} bot link disconnected",
           "detail" => "Grok Bot link is disconnected",
@@ -2863,6 +2984,7 @@ class OpsTabServer
       elsif machine["link"] == "unknown" && machine["heartbeat"] == "dead"
         {
           "kind" => "machine",
+          "reason" => "machine_heartbeat",
           "id" => label,
           "title" => "#{label} heartbeat stale, bot link unknown",
           "detail" => "Host heartbeat is #{HEARTBEAT_LIVE_S / 60}m or older, and the bot link is unknown",
@@ -2883,6 +3005,7 @@ class OpsTabServer
         wt = s["worktree"] || File.basename(s["cwd"].to_s)
         rows << {
           "kind" => "agent",
+          "reason" => "agent_exited",
           "id" => "grok",
           "title" => "Process in #{wt} exited without a completed turn_ended",
           "detail" => s["detail"],
@@ -2894,6 +3017,7 @@ class OpsTabServer
         wt = s["worktree"] || File.basename(s["cwd"].to_s)
         rows << {
           "kind" => "agent",
+          "reason" => "permission",
           "id" => "claude",
           "title" => "#{wt} is waiting on a permission prompt",
           "detail" => s["detail"],
@@ -2920,6 +3044,7 @@ class OpsTabServer
       verb = mention["kind"] == "mention" ? "mentioned you in" : "commented on"
       rows << {
         "kind" => "linear",
+        "reason" => "linear_mention",
         "id" => ident,
         "title" => "#{actor} #{verb} #{ident}",
         "detail" => mention["excerpt"],
@@ -2938,6 +3063,7 @@ class OpsTabServer
       excerpt = issue["last_comment_excerpt"].to_s
       rows << {
         "kind" => "linear",
+        "reason" => "linear_question",
         "id" => issue["id"],
         "title" => "#{issue["last_comment_by"]} asked a question in #{issue["state"]}",
         "detail" => "\"#{excerpt}\"",
@@ -2995,6 +3121,7 @@ class OpsTabServer
         detail = seat["text"].to_s.sub(/\Aexhausted\s*(·\s*)?/, "")
         rows << {
           "kind" => "quota",
+          "reason" => "quota",
           "id" => id,
           "title" => "#{id} exhausted",
           "detail" => detail,
@@ -3011,6 +3138,7 @@ class OpsTabServer
       n = pct.round
       rows << {
         "kind" => "quota",
+        "reason" => "quota",
         "id" => id,
         "title" => "#{seat["label"]} at #{n}%",
         "detail" => seat["text"],
@@ -3047,6 +3175,7 @@ class OpsTabServer
       detail = [pr["ci_failed_name"], pr["title"]].compact.reject { |s| s.to_s.empty? }.join(" · ")
       rows << {
         "kind" => "pr",
+        "reason" => "ci_failed",
         "id" => id,
         "title" => "CI failed on the last push",
         "detail" => detail,
@@ -3062,6 +3191,7 @@ class OpsTabServer
       noun = awaiting == 1 ? "thread" : "threads"
       rows << {
         "kind" => "pr",
+        "reason" => "review_thread",
         "id" => id,
         "title" => "#{awaiting} review #{noun} from #{who} with no reply",
         "detail" => pr["title"],
@@ -3075,6 +3205,7 @@ class OpsTabServer
       who = pr["changes_requested_by"] || "reviewer"
       rows << {
         "kind" => "pr",
+        "reason" => "changes_requested",
         "id" => id,
         "title" => "#{who} requested changes",
         "detail" => pr["title"],
@@ -3090,17 +3221,26 @@ class OpsTabServer
   def needs_you_review(pr, wt_rows)
     return [] if pr["draft"]
 
-    t = pr["requested_at"] || pr["created_at"]
+    # The hour of grace starts when the review was requested, or when the PR
+    # was marked ready if that is the only event we have. Creation time is the
+    # last resort, so a missing timeline does not restart the hour.
+    t = pr["requested_at"] || pr["ready_at"] || pr["created_at"]
     return [] if t.nil? || t.to_s.empty?
     return [] unless Time.parse(t.to_s) <= (utc_now - REVIEW_REQUEST_GRACE)
 
+    since = pr["since"]
+    since = t if since.nil? || since.to_s.empty?
     [{
       "kind" => "pr",
+      "reason" => "review_request",
       "id" => "##{pr["number"]}",
       "title" => "#{pr["requested_by"] || pr["author"] || "someone"} asked for your review",
       "detail" => pr["title"],
-      "since" => pr["since"] || t,
-      "expires_from" => pr["updated_at"] || pr["since"] || t,
+      "since" => since,
+      # 14 days from the last update. Do not substitute the request-time
+      # `since`: that would expire a review asked for today on an old PR, and
+      # would keep a PR that has been quiet for two weeks.
+      "expires_from" => pr["updated_at"] || pr["created_at"] || t,
       "action" => "review",
       "action_url" => pr["url"],
       "worktree" => worktree_for_pr(pr, wt_rows)
