@@ -2947,6 +2947,8 @@ class OpsTabServer
 
   # nil labels means the connection was missing. An empty array is a real
   # empty list. Fail closed treats nil as "do not emit a team-ask row".
+  # labels(first:10) is the accepted bound: prototype past the tenth label
+  # can be missed, and there is no follow-up query.
   def label_names(gql)
     return nil unless gql.is_a?(Hash) && gql.key?("labels")
 
@@ -3849,6 +3851,8 @@ class OpsTabServer
     true
   end
 
+  # Packet backstop: a pending hide that never sees a refresh returns after
+  # 15 minutes so a stalled source cannot hide the row forever.
   def pending_ttl_expired?(entry, avail, now)
     at = parse_time(entry["at"])
     return false if at.nil?

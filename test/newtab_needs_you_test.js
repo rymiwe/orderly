@@ -125,16 +125,20 @@ function isoBefore(ms) {
   return new Date(NOW - ms).toISOString();
 }
 
-async function renderNeeds(rows, extra) {
+async function renderNeeds(rows, extra, options) {
   extra = extra || {};
+  options = options || {};
   const ids = {};
+  const docListeners = [];
   const document = {
     visibilityState: "hidden",
     title: "",
     getElementById: (id) => (ids[id] = ids[id] || new Node("div")),
     createElement: (t) => new Node(t),
     createTextNode: (t) => new Node("#text", t),
-    addEventListener() {},
+    addEventListener(type, fn) {
+      docListeners.push({ type, fn });
+    },
     querySelector: () => null,
     querySelectorAll: () => [],
     body: new Node("body"),
@@ -157,7 +161,7 @@ async function renderNeeds(rows, extra) {
     clearTimeout,
     setInterval: () => 0,
     clearInterval() {},
-    fetch: () => Promise.resolve({
+    fetch: options.fetch || (() => Promise.resolve({
       ok: true,
       status: 200,
       json: () => Promise.resolve({
@@ -171,13 +175,16 @@ async function renderNeeds(rows, extra) {
           }
         }
       })
-    }),
+    })),
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} }
   };
   ctx.window = ctx;
   const source = withFrozenNow(fs.readFileSync(SRC, "utf8"), NOW);
   vm.runInNewContext(source, ctx, { filename: SRC });
   await new Promise((resolve) => setTimeout(resolve, 30));
+  ids.needs._fire = (type) => {
+    docListeners.filter((l) => l.type === type).forEach((l) => l.fn({}));
+  };
   return ids.needs;
 }
 
@@ -401,4 +408,58 @@ test("renders snoozed and pending state without counting hidden rows in a tier",
   assert.equal(needs.all().find((n) => n.className === "eyebrow").textContent, "Needs you · 2");
   const team = row(needs, "platform asked for a review");
   assert.ok(team.className.split(/\s+/).includes("dim"));
+});
+
+test("a poll started before the click does not bring the row back", async () => {
+  const rowData = {
+    tier: "direct_ask",
+    id: "#4",
+    title: "Review the latch",
+    since: isoBefore(3 * 60 * 60 * 1000),
+    kind: "pr",
+    clear_key: "github:acme/widgets#4:review",
+    action: "review",
+    action_url: "https://example.test/acme/widgets/4"
+  };
+  const cards = {
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve({
+      cards: {
+        needs_you: {
+          fetched_at: new Date(NOW).toISOString(),
+          error: null,
+          data: [rowData],
+          pending_keys: [],
+          snoozed: 0
+        }
+      }
+    })
+  };
+  let cardsCalls = 0;
+  let releaseStale;
+  const needs = await renderNeeds([rowData], {}, {
+    fetch: (_url, opts) => {
+      if (opts && opts.method === "POST") {
+        assert.equal(opts.keepalive, true);
+        return Promise.resolve({ ok: true, status: 204, json: () => Promise.resolve({}) });
+      }
+      cardsCalls += 1;
+      if (cardsCalls === 1) return Promise.resolve(cards);
+      return new Promise((resolve) => {
+        releaseStale = () => resolve(cards);
+      });
+    }
+  });
+  assert.ok(needs.textContent.includes("Review the latch"));
+  needs._fire("visibilitychange");
+  assert.equal(cardsCalls, 2);
+  const act = row(needs, "Review the latch").all().find((n) => n.className === "act");
+  act.dispatch("click");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(needs.textContent.includes("Review the latch"), false);
+  releaseStale();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(needs.textContent.includes("Review the latch"), false, "stale poll restored the row");
+  assert.match(needs.all().find((n) => n.className === "pending-mark").textContent, /pending · 1/);
 });
