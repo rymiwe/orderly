@@ -60,7 +60,14 @@ class Node {
   removeAttribute(k) {
     delete this.attrs[k];
   }
-  addEventListener() {}
+  addEventListener(type, fn) {
+    this._listeners = this._listeners || [];
+    this._listeners.push({ type, fn });
+  }
+  dispatch(type) {
+    const ev = { preventDefault() {}, target: this };
+    (this._listeners || []).filter((l) => l.type === type).forEach((l) => l.fn(ev));
+  }
   get classList() {
     const n = this;
     return {
@@ -118,7 +125,8 @@ function isoBefore(ms) {
   return new Date(NOW - ms).toISOString();
 }
 
-async function renderNeeds(rows) {
+async function renderNeeds(rows, extra) {
+  extra = extra || {};
   const ids = {};
   const document = {
     visibilityState: "hidden",
@@ -157,7 +165,9 @@ async function renderNeeds(rows) {
           needs_you: {
             fetched_at: new Date(NOW).toISOString(),
             error: null,
-            data: rows
+            data: rows,
+            pending_keys: extra.pending_keys || [],
+            snoozed: extra.snoozed || 0
           }
         }
       })
@@ -281,4 +291,114 @@ test("age badges break at exactly one, three, and seven days", async () => {
   const needs = await renderNeeds(rows.map((c) => c.row));
   assert.deepEqual(tiers(needs).map(groupLabel), [`Informational · ${rows.length}`]);
   for (const c of rows) assertBucket(needs, c.title, c.bucket, c.label);
+});
+
+test("dims a team-ask row and keeps its tier count", async () => {
+  const needs = await renderNeeds([
+    {
+      tier: "team_ask",
+      dim: true,
+      id: "#8",
+      title: "platform, frontend asked for a review",
+      since: isoBefore(2 * DAY),
+      kind: "pr",
+      clear_key: "github:acme/widgets#8:team",
+      ask_from: "frontend,platform",
+      action: "review",
+      action_url: "https://example.test/acme/widgets/8"
+    },
+    {
+      tier: "direct_ask",
+      id: "#3",
+      title: "Ada asked for your review",
+      since: isoBefore(DAY),
+      kind: "pr",
+      clear_key: "github:acme/widgets#3:review",
+      action: "review",
+      action_url: "https://example.test/acme/widgets/3"
+    }
+  ]);
+  const blocks = tiers(needs);
+  assert.deepEqual(blocks.map(groupLabel), ["Direct ask · 1", "Team ask · 1"]);
+  const team = row(needs, "platform, frontend asked for a review");
+  assert.ok(team.className.split(/\s+/).includes("dim"), team.className);
+  assert.equal(team.className.includes("dim"), true);
+  assert.ok(needs.textContent.includes("platform"));
+  assert.ok(needs.textContent.includes("frontend"));
+  const direct = row(needs, "Ada asked for your review");
+  assert.equal(direct.className.split(/\s+/).includes("dim"), false);
+});
+
+test("clicking an action hides the row and shows a pending marker", async () => {
+  const needs = await renderNeeds([
+    {
+      tier: "direct_ask",
+      id: "#4",
+      title: "Review the latch",
+      since: isoBefore(3 * 60 * 60 * 1000),
+      kind: "pr",
+      clear_key: "github:acme/widgets#4:review",
+      action: "review",
+      action_url: "https://example.test/acme/widgets/4"
+    },
+    {
+      tier: "informational",
+      id: "q",
+      title: "Codex exhausted",
+      since: isoBefore(DAY),
+      kind: "quota",
+      clear_key: "quota:codex"
+    }
+  ]);
+  assert.equal(needs.textContent.includes("pending"), false);
+  const act = row(needs, "Review the latch").all().find((n) => n.className === "act");
+  assert.ok(act, "action control");
+  act.dispatch("click");
+  assert.equal(needs.textContent.includes("Review the latch"), false);
+  const mark = needs.all().find((n) => n.className === "pending-mark");
+  assert.ok(mark, "pending marker");
+  assert.match(mark.textContent, /pending · 1/);
+  assert.deepEqual(tiers(needs).map(groupLabel), ["Informational · 1"]);
+  assert.equal(needs.all().find((n) => n.className === "eyebrow").textContent, "Needs you · 1");
+});
+
+test("renders snoozed and pending state without counting hidden rows in a tier", async () => {
+  const needs = await renderNeeds([
+    {
+      tier: "direct_ask",
+      id: "#4",
+      title: "Hidden ask",
+      since: isoBefore(DAY),
+      kind: "pr",
+      clear_key: "github:acme/widgets#4:review"
+    },
+    {
+      tier: "direct_ask",
+      id: "#5",
+      title: "Visible ask",
+      since: isoBefore(2 * DAY),
+      kind: "pr",
+      clear_key: "github:acme/widgets#5:review"
+    },
+    {
+      tier: "team_ask",
+      dim: true,
+      id: "#9",
+      title: "platform asked for a review",
+      since: isoBefore(DAY),
+      kind: "pr",
+      clear_key: "github:acme/widgets#9:team"
+    }
+  ], { pending_keys: ["github:acme/widgets#4:review"], snoozed: 2 });
+  assert.equal(needs.textContent.includes("Hidden ask"), false);
+  assert.ok(needs.textContent.includes("Visible ask"));
+  assert.ok(needs.textContent.includes("platform asked for a review"));
+  const pending = needs.all().find((n) => n.className === "pending-mark");
+  const snoozed = needs.all().find((n) => n.className === "snooze-mark");
+  assert.equal(pending.textContent, "pending · 1");
+  assert.equal(snoozed.textContent, "snoozed · 2");
+  assert.deepEqual(tiers(needs).map(groupLabel), ["Direct ask · 1", "Team ask · 1"]);
+  assert.equal(needs.all().find((n) => n.className === "eyebrow").textContent, "Needs you · 2");
+  const team = row(needs, "platform asked for a review");
+  assert.ok(team.className.split(/\s+/).includes("dim"));
 });
