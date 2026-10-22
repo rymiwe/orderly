@@ -107,9 +107,9 @@ PRUNE_AFTER = 14 * 24 * 60 * 60
 GROK_MAX_AGE = 7 * 24 * 60 * 60
 GROK_NEEDS_YOU_MAX_AGE = 24 * 60 * 60
 NEEDS_YOU_PR_MAX_AGE = 14 * 24 * 60 * 60
-# Highest priority first. Age only orders rows inside a tier. team_ask stays
-# in the order so the section can show it; no needs-you row is a team ask
-# today (those PRs stay on the PR card).
+# Highest priority first. Age only orders rows inside a tier. A team-ask row
+# uses reason "team_ask" so it lands in that tier; the PR card's own team
+# group is a different list and stays capped at 15.
 NEEDS_YOU_TIER_ORDER = %w[direct_ask blocked_on_me team_ask informational].freeze
 NEEDS_YOU_TIER_LABEL = {
   "direct_ask" => "Direct ask",
@@ -128,8 +128,18 @@ NEEDS_YOU_KIND_TIER = {
 }.freeze
 NEEDS_YOU_REASON_TIER = {
   "ci_failed" => "blocked_on_me",
-  "agent_exited" => "informational"
+  "agent_exited" => "informational",
+  "team_ask" => "team_ask"
 }.freeze
+# Summary keys are the short names from the design packet. Row `tier` stays
+# the longer id this page already renders.
+SUMMARY_TIER_KEY = {
+  "direct_ask" => "direct",
+  "blocked_on_me" => "blocked",
+  "team_ask" => "team",
+  "informational" => "info"
+}.freeze
+SUMMARY_SOURCES = %w[github linear agent quota machine slack].freeze
 CODEX_WORKING_MTIME = 120
 TAIL_BYTES = 16_384
 # Ceiling for re-reading when a single JSONL record is larger than the window.
@@ -190,6 +200,25 @@ REVIEW_KEEP_LIMIT = 30
 REVIEW_TEAM_KEEP_LIMIT = 15
 REVIEW_REQUEST_GRACE = 3600
 REVIEW_RECENT_WINDOW = 7 * 24 * 60 * 60
+# Team-ask staleness. Not REVIEW_RECENT_WINDOW: that one is the "reviewed by
+# me" lookback subtracted from updated_at.
+TEAM_ASK_MAX_AGE = 7 * 24 * 60 * 60
+PENDING_TTL = 15 * 60
+UNTIL_CHANGE_BACKSTOP = 14 * 24 * 60 * 60
+SNOOZE_UNTIL_MAX = 30 * 24 * 60 * 60
+# One overlay file on this machine. Not the repo, and not cache.json.
+# Tests point OPS_TAB_OVERLAY_PATH at a temp file.
+OVERLAY_PATH = ENV["OPS_TAB_OVERLAY_PATH"] || File.join(HOME, ".local/state/ops-tab/needs-you-overlay.json")
+OVERLAY_BODY_MAX = 16_384
+# Adapter source id -> snapshot key in @sources. slack has no producer.
+NEEDS_YOU_SNAPSHOT = {
+  "github" => "prs",
+  "linear" => "linear",
+  "agent" => "local",
+  "quota" => "quota",
+  "machine" => "machines",
+  "slack" => "slack"
+}.freeze
 BOT_AUTHOR_LOGINS = %w[dependabot dependabot[bot] renovate].freeze
 CHECK_FAIL_CONCLUSIONS = %w[FAILURE TIMED_OUT STARTUP_FAILURE ACTION_REQUIRED].freeze
 STATUS_FAIL_STATES = %w[FAILURE ERROR].freeze
@@ -202,7 +231,9 @@ PR_GQL_FIELDS = <<-'GQL'.freeze
       createdAt
       reviewDecision
       author { login }
-      commits(last:1){nodes{commit{statusCheckRollup{state contexts(first:50){nodes{... on CheckRun{name conclusion completedAt detailsUrl} ... on StatusContext{context state targetUrl}}}}}}}
+      commits(last:1){nodes{commit{oid statusCheckRollup{state contexts(first:50){nodes{... on CheckRun{name conclusion completedAt detailsUrl} ... on StatusContext{context state targetUrl}}}}}}}
+      labels(first:10){nodes{name}}
+      comments(last:1){nodes{url}}
       reviewThreads(first:50){nodes{isResolved comments(last:1){nodes{author{login} createdAt url}}}}
       latestReviews(first:20){nodes{author{login} state submittedAt}}
       reviewRequests(first:10){nodes{requestedReviewer{__typename ... on User{login} ... on Team{name slug}}}}
@@ -1138,6 +1169,145 @@ class Collector
   end
 end
 
+# fetch reads cached snapshots only. It does not call the network.
+#
+# Snapshot name is not the source id: github reads "prs", agent reads
+# "local", machine reads "machines". Linear rows are built from the composed
+# linear projection (group and worktree joins). Those joins stay out of the
+# source cache; compose_cards builds them and the adapter reads that
+# projection. Agent rows read the local snapshot's sessions. Quota, machines,
+# and GitHub read their own snapshots. The needs_you_from_* methods are the
+# predicate bodies each adapter calls. build_needs_you only flat-maps fetch,
+# so they are not a second writer. SlackAdapter is an empty slot: no client,
+# no credentials, no rows.
+module NeedsYou
+  class Adapter
+    def source_id
+      raise NotImplementedError
+    end
+
+    def fetch(_ctx)
+      raise NotImplementedError
+    end
+  end
+
+  class MemoryContext
+    attr_reader :worktrees
+
+    def initialize(snapshots:, worktrees: [], fetched_at: {})
+      @snapshots = snapshots
+      @worktrees = worktrees || []
+      @fetched_at = fetched_at || {}
+    end
+
+    def snapshot(name)
+      @snapshots[name]
+    end
+
+    def fetched_at(name)
+      @fetched_at[name]
+    end
+  end
+
+  class GithubAdapter < Adapter
+    def initialize(server)
+      @server = server
+    end
+
+    def source_id
+      "github"
+    end
+
+    def fetch(ctx)
+      prs = ctx.snapshot("prs")
+      return [] if prs.nil?
+
+      @server.send(:needs_you_from_prs, prs, ctx.worktrees)
+    end
+  end
+
+  class LinearAdapter < Adapter
+    def initialize(server)
+      @server = server
+    end
+
+    def source_id
+      "linear"
+    end
+
+    def fetch(ctx)
+      linear = ctx.snapshot("linear")
+      return [] if linear.nil?
+
+      @server.send(:needs_you_from_linear, linear, ctx.worktrees)
+    end
+  end
+
+  class AgentAdapter < Adapter
+    def initialize(server)
+      @server = server
+    end
+
+    def source_id
+      "agent"
+    end
+
+    def fetch(ctx)
+      local = ctx.snapshot("local")
+      return [] if local.nil?
+
+      sessions = local.is_a?(Hash) ? local["sessions"] : local
+      sessions = [] unless sessions.is_a?(Array)
+      @server.send(:needs_you_from_agents, sessions)
+    end
+  end
+
+  class MachineAdapter < Adapter
+    def initialize(server)
+      @server = server
+    end
+
+    def source_id
+      "machine"
+    end
+
+    def fetch(ctx)
+      machines = ctx.snapshot("machines")
+      return [] if machines.nil?
+
+      @server.send(:needs_you_from_machines, machines)
+    end
+  end
+
+  class QuotaAdapter < Adapter
+    def initialize(server)
+      @server = server
+    end
+
+    def source_id
+      "quota"
+    end
+
+    def fetch(ctx)
+      quota = ctx.snapshot("quota")
+      return [] if quota.nil?
+
+      @server.send(:needs_you_from_quota, quota)
+    end
+  end
+
+  class SlackAdapter < Adapter
+    def source_id
+      "slack"
+    end
+
+    # Empty until a later change fills a slack snapshot. No HTTP client.
+    def fetch(_ctx)
+      []
+    end
+  end
+end
+
 class OpsTabServer
   def initialize
     @mutex = Mutex.new
@@ -1164,6 +1334,7 @@ class OpsTabServer
       "machines" => empty_source
     }
     load_cache
+    load_overlay
     @linear_key = read_linear_key
     if @linear_key.nil?
       # Documented behaviour: no key means the Linear card serves nothing, not
@@ -1179,6 +1350,8 @@ class OpsTabServer
     )
     @http.mount_proc("/cards") { |req, res| handle_cards(req, res) }
     @http.mount_proc("/health") { |req, res| handle_health(req, res) }
+    @http.mount_proc("/needs_you/summary") { |req, res| handle_needs_you_summary(req, res) }
+    @http.mount_proc("/needs_you/overlay") { |req, res| handle_needs_you_overlay(req, res) }
     trap("INT") { @http.shutdown }
     trap("TERM") { @http.shutdown }
   end
@@ -1266,6 +1439,28 @@ class OpsTabServer
     File.rename(tmp, CACHE_PATH)
   end
 
+  def load_overlay
+    @overlay = { "version" => 1, "entries" => {} }
+    return unless File.file?(OVERLAY_PATH)
+
+    parsed = JSON.parse(File.read(OVERLAY_PATH))
+    unless parsed.is_a?(Hash) && parsed["version"] == 1 && parsed["entries"].is_a?(Hash)
+      warn "needs-you overlay left unread (unknown version or shape)"
+      return
+    end
+
+    @overlay = { "version" => 1, "entries" => parsed["entries"] }
+  rescue JSON::ParserError => e
+    warn "needs-you overlay left unread: #{e.message}"
+  end
+
+  def save_overlay
+    FileUtils.mkdir_p(File.dirname(OVERLAY_PATH))
+    tmp = "#{OVERLAY_PATH}.tmp"
+    File.write(tmp, JSON.generate(@overlay))
+    File.rename(tmp, OVERLAY_PATH)
+  end
+
   def start_threads
     Thread.new do
       loop do
@@ -1292,6 +1487,7 @@ class OpsTabServer
   def refresh_local
     # Fleet is its own source. A git failure must not skip it, and a bad fleet
     # cache must not blank worktrees or agents.
+    started = iso(utc_now)
     machines_data, machines_err = fetch_machines_result
     rows = nil
     sessions = nil
@@ -1322,14 +1518,14 @@ class OpsTabServer
       if rows
         # Partial failure: keep the repos that worked and say which one did not.
         @local_error = repo_errors.empty? ? nil : repo_errors.uniq.join("; ")
-        @sources["local"] = { "data" => { "rows" => rows, "sessions" => sessions }, "fetched_at" => now }
-        @sources["pings"] = { "data" => pings, "fetched_at" => now }
+        @sources["local"] = { "data" => { "rows" => rows, "sessions" => sessions }, "fetched_at" => now, "refresh_started_at" => started }
+        @sources["pings"] = { "data" => pings, "fetched_at" => now, "refresh_started_at" => started }
       elsif local_err
         @local_error = local_err
       end
       if machines_data
         @machines_error = nil
-        @sources["machines"] = { "data" => machines_data, "fetched_at" => now }
+        @sources["machines"] = { "data" => machines_data, "fetched_at" => now, "refresh_started_at" => started }
       elsif machines_err
         @machines_error = machines_err
         warn "machines: #{machines_err}"
@@ -1369,6 +1565,9 @@ class OpsTabServer
   def refresh_remote
     # No leg reads another's result, so they run together. The window where one
     # slow vendor holds up the rest is the slowest leg, not their sum.
+    # Stamp the start before the vendor calls so a click during this refresh
+    # is not confirmed by the result (opinion 5).
+    started = iso(utc_now)
     legs = run_legs(
       "linear" => -> { fetch_linear },
       "quota" => -> { fetch_quota },
@@ -1396,13 +1595,13 @@ class OpsTabServer
       end
       if prs_data
         @prs_error = nil
-        @sources["prs"] = { "data" => prs_data, "fetched_at" => now }
+        @sources["prs"] = { "data" => prs_data, "fetched_at" => now, "refresh_started_at" => started }
       else
         @prs_error = prs_err
       end
       if linear_data
         @linear_error = @linear_mentions_error
-        @sources["linear"] = { "data" => linear_data, "fetched_at" => now }
+        @sources["linear"] = { "data" => linear_data, "fetched_at" => now, "refresh_started_at" => started }
       elsif linear_err == NO_LINEAR_KEY
         @linear_error = NO_LINEAR_KEY
         @sources["linear"] = empty_source
@@ -1411,7 +1610,7 @@ class OpsTabServer
       end
       if quota_data
         @quota_error = nil
-        @sources["quota"] = { "data" => quota_data, "fetched_at" => now }
+        @sources["quota"] = { "data" => quota_data, "fetched_at" => now, "refresh_started_at" => started }
       else
         @quota_error = quota_err
       end
@@ -1470,26 +1669,38 @@ class OpsTabServer
     mine = mine_hits.map { |hit| shape_pr_row(hit, details[pr_search_key(hit)], :mine) }
     review = []
     team = []
+    # Raw team candidates, before the card's predicate and before the 15 cap.
+    # The card still slices review_requested_team. Needs-you reads this list.
+    candidates = []
     review_hits.each do |hit|
       gql = details[pr_search_key(hit)]
+      shaped = shape_pr_row(hit, gql, :review)
+      candidates << shaped.dup if shaped["team_requested"]
       if keep_review_requested?(hit, gql)
-        review << shape_pr_row(hit, gql, :review)
+        review << shaped
       elsif keep_review_requested_team?(hit, gql)
-        row = shape_pr_row(hit, gql, :review)
+        row = shaped.dup
         row["requested_via"] = "team"
         team << row
       end
     end
     team.sort_by! { |r| r["updated_at"].to_s }.reverse!
+    pack_review_snapshot(mine, review, team, candidates, review_hits.size)
+  end
+
+  # The card lists are capped. team_ask_candidates is not.
+  def pack_review_snapshot(mine, review, team, candidates, review_hits_size)
     {
       "mine" => mine,
       "review_requested" => review.first(REVIEW_KEEP_LIMIT),
       "review_requested_team" => team.first(REVIEW_TEAM_KEEP_LIMIT),
+      "team_ask_candidates" => candidates,
       "counts" => {
         "mine" => mine.size,
         "review_requested" => review.size,
         "review_requested_team" => team.size,
-        "review_requested_raw" => review_hits.size
+        "review_requested_raw" => review_hits_size,
+        "team_ask_candidates" => candidates.size
       }
     }
   end
@@ -2577,6 +2788,7 @@ class OpsTabServer
     threads = thread_stats(gql)
     reviews = review_stats(gql)
     requested = requested_reviewers(gql)
+    reviews_known, reviews_empty = reviews_presence(gql)
     decision = gql && gql["reviewDecision"]
     row = {
       "number" => hit["number"],
@@ -2604,7 +2816,18 @@ class OpsTabServer
       # The search hit alone says nothing about CI, threads or reviews. Without
       # the GraphQL node those fields are defaults, not findings, so the row
       # says so rather than rendering as a healthy PR.
-      "details" => gql.nil? ? "unknown" : "ok"
+      "details" => gql.nil? ? "unknown" : "ok",
+      # Kept for needs-you. The PR card does not draw these.
+      "team_reviewers" => team_reviewers_from(gql),
+      "team_requested" => team_review_requested?(gql),
+      "direct_review" => direct_review_requested?(gql),
+      "labels" => label_names(gql),
+      "reviews_known" => reviews_known,
+      "reviews_empty" => reviews_empty,
+      "head_oid" => head_oid_from(gql),
+      "issue_comment_url" => issue_comment_url_from(gql),
+      "latest_thread_comment_url" => latest_thread_comment_url(gql),
+      "viewer_is_author" => me?(author)
     }
     if tab == :mine
       group, since = group_mine(row, threads, reviews)
@@ -2706,6 +2929,135 @@ class OpsTabServer
     nodes = gql&.dig("reviewRequests", "nodes") || []
     logins = nodes.map { |n| n.dig("requestedReviewer", "login") }.compact.uniq
     logins
+  end
+
+  def team_reviewers_from(gql)
+    nodes = gql&.dig("reviewRequests", "nodes") || []
+    nodes.filter_map do |node|
+      reviewer = node["requestedReviewer"]
+      next unless reviewer.is_a?(Hash) && reviewer["__typename"].to_s == "Team"
+
+      slug = reviewer["slug"].to_s
+      next if slug.empty?
+
+      name = reviewer["name"].to_s
+      { "slug" => slug, "name" => name.empty? ? slug : name }
+    end.uniq { |team| team["slug"] }
+  end
+
+  # nil labels means the connection was missing. An empty array is a real
+  # empty list. Fail closed treats nil as "do not emit a team-ask row".
+  # labels(first:10) is the accepted bound: prototype past the tenth label
+  # can be missed, and there is no follow-up query.
+  def label_names(gql)
+    return nil unless gql.is_a?(Hash) && gql.key?("labels")
+
+    nodes = gql.dig("labels", "nodes")
+    return nil unless nodes.is_a?(Array)
+
+    nodes.filter_map { |node| node.is_a?(Hash) ? node["name"].to_s : nil }
+  end
+
+  def reviews_presence(gql)
+    return [false, false] unless gql.is_a?(Hash) && gql.key?("latestReviews")
+
+    nodes = gql.dig("latestReviews", "nodes")
+    return [false, false] unless nodes.is_a?(Array)
+
+    [true, nodes.empty?]
+  end
+
+  def head_oid_from(gql)
+    oid = gql&.dig("commits", "nodes", 0, "commit", "oid").to_s
+    oid.empty? ? nil : oid
+  end
+
+  def issue_comment_url_from(gql)
+    node = gql&.dig("comments", "nodes", 0)
+    return nil unless node.is_a?(Hash)
+
+    url = node["url"].to_s
+    url.empty? ? nil : url
+  end
+
+  def latest_thread_comment_url(gql)
+    nodes = gql&.dig("reviewThreads", "nodes")
+    return nil unless nodes.is_a?(Array)
+
+    comments = nodes.filter_map do |thread|
+      next unless thread.is_a?(Hash)
+
+      (thread.dig("comments", "nodes") || []).last
+    end
+    last = comments.max_by { |comment| comment["createdAt"].to_s }
+    url = last && last["url"].to_s
+    url.nil? || url.empty? ? nil : url
+  end
+
+  def team_slugs(pr)
+    (pr["team_reviewers"] || []).map { |team| team["slug"].to_s }.reject(&:empty?).uniq.sort
+  end
+
+  def team_names(pr, slugs)
+    slugs.map do |slug|
+      hit = (pr["team_reviewers"] || []).find { |team| team["slug"] == slug }
+      name = hit && hit["name"].to_s
+      name.nil? || name.empty? ? slug : name
+    end
+  end
+
+  def github_key(pr, suffix)
+    "github:#{pr["repo"]}##{pr["number"]}:#{suffix}"
+  end
+
+  # Precise token: oid, latest thread-comment URL, latest issue-comment URL.
+  # A missing piece is omitted. updated_at is used only when all three are
+  # missing. Team rows also append sorted slugs so a team change is a change.
+  def github_review_token(pr, teams: false)
+    oid = pr["head_oid"].to_s
+    thread = pr["latest_thread_comment_url"].to_s
+    issue = pr["issue_comment_url"].to_s
+    parts = []
+    parts << "oid:#{oid}" unless oid.empty?
+    parts << "thread:#{thread}" unless thread.empty?
+    parts << "issue:#{issue}" unless issue.empty?
+    parts << "updated:#{pr["updated_at"]}" if oid.empty? && thread.empty? && issue.empty?
+    parts << "teams:#{team_slugs(pr).join(",")}" if teams
+    parts.join("|")
+  end
+
+  def ci_change_token(pr)
+    name = pr["ci_failed_name"].to_s
+    at = pr["ci_failed_at"].to_s
+    return "check:#{name}|at:#{at}" if !name.empty? || !at.empty?
+
+    "oid:#{pr["head_oid"]}"
+  end
+
+  def stamp_needs_you(row, source:, clear_key:, change_token:, ask_from:, dim: false)
+    row["source"] = source
+    row["clear_key"] = clear_key
+    row["change_token"] = change_token.to_s
+    row["ask_from"] = ask_from
+    row["dim"] = dim ? true : false
+    row["tier"] = needs_you_tier(row)
+    row
+  end
+
+  def agent_clear_key(session)
+    sid = session["id"].to_s
+    sid = session["worktree"].to_s if sid.empty?
+    sid = session["cwd"].to_s if sid.empty?
+    sid = session["tool"].to_s if sid.empty?
+    "agent:#{session["tool"]}:#{sid}"
+  end
+
+  # verified_at changes on every read. The token is exhausted plus the rounded
+  # percent, so a snooze survives the next remote tick while the percent holds.
+  def quota_change_token(seat)
+    pct = seat["percent"]
+    pct_s = pct.is_a?(Numeric) ? pct.round.to_s : ""
+    "exhausted:#{seat["exhausted"] ? "true" : "false"}|pct:#{pct_s}"
   end
 
   # No reviewed_recently_by_me? check on this path. GitHub drops you from
@@ -2947,10 +3299,30 @@ class OpsTabServer
     [rank, since.empty? ? "9999" : since]
   end
 
+  def needs_you_adapters
+    @needs_you_adapters ||= [
+      NeedsYou::GithubAdapter.new(self),
+      NeedsYou::LinearAdapter.new(self),
+      NeedsYou::AgentAdapter.new(self),
+      NeedsYou::MachineAdapter.new(self),
+      NeedsYou::QuotaAdapter.new(self),
+      NeedsYou::SlackAdapter.new
+    ]
+  end
+
   def build_needs_you(sessions, prs, linear, quota, wt_rows, machines)
-    rows = needs_you_from_agents(sessions) + needs_you_from_prs(prs, wt_rows) +
-      needs_you_from_linear(linear, wt_rows) + needs_you_from_machines(machines) +
-      needs_you_from_quota(quota)
+    ctx = NeedsYou::MemoryContext.new(
+      snapshots: {
+        "prs" => prs,
+        "linear" => linear,
+        "quota" => quota,
+        "machines" => machines,
+        "local" => sessions.nil? ? nil : { "sessions" => sessions },
+        "slack" => nil
+      },
+      worktrees: wt_rows || []
+    )
+    rows = needs_you_adapters.flat_map { |adapter| adapter.fetch(ctx) }
     rows.reject! { |r| pr_needs_you_expired?(r) }
     rows.each { |r| r["tier"] = needs_you_tier(r) }
     rows.sort_by! { |r| needs_you_sort_key(r) }
@@ -2970,28 +3342,42 @@ class OpsTabServer
       next unless machine["expected_always_on"]
 
       label = machine["label"].to_s
+      mid = machine["id"].to_s
+      mid = label if mid.empty?
       if machine["link"] == "disconnected"
-        {
-          "kind" => "machine",
-          "reason" => "machine_link",
-          "id" => label,
-          "title" => "#{label} bot link disconnected",
-          "detail" => "Grok Bot link is disconnected",
-          "since" => machine["link_as_of"],
-          "action" => "Grok Bot",
-          "worktree" => nil
-        }
+        stamp_needs_you(
+          {
+            "kind" => "machine",
+            "reason" => "machine_link",
+            "id" => label,
+            "title" => "#{label} bot link disconnected",
+            "detail" => "Grok Bot link is disconnected",
+            "since" => machine["link_as_of"],
+            "action" => "Grok Bot",
+            "worktree" => nil
+          },
+          source: "machine",
+          clear_key: "machine:#{mid}:link",
+          change_token: machine["link"].to_s,
+          ask_from: nil
+        )
       elsif machine["link"] == "unknown" && machine["heartbeat"] == "dead"
-        {
-          "kind" => "machine",
-          "reason" => "machine_heartbeat",
-          "id" => label,
-          "title" => "#{label} heartbeat stale, bot link unknown",
-          "detail" => "Host heartbeat is #{HEARTBEAT_LIVE_S / 60}m or older, and the bot link is unknown",
-          "since" => machine["heartbeat_last"],
-          "action" => "Grok Bot",
-          "worktree" => nil
-        }
+        stamp_needs_you(
+          {
+            "kind" => "machine",
+            "reason" => "machine_heartbeat",
+            "id" => label,
+            "title" => "#{label} heartbeat stale, bot link unknown",
+            "detail" => "Host heartbeat is #{HEARTBEAT_LIVE_S / 60}m or older, and the bot link is unknown",
+            "since" => machine["heartbeat_last"],
+            "action" => "Grok Bot",
+            "worktree" => nil
+          },
+          source: "machine",
+          clear_key: "machine:#{mid}:heartbeat",
+          change_token: machine["heartbeat"].to_s,
+          ask_from: nil
+        )
       end
     end
   end
@@ -3003,28 +3389,40 @@ class OpsTabServer
         next unless grok_unconfirmed_needs_you?(s)
 
         wt = s["worktree"] || File.basename(s["cwd"].to_s)
-        rows << {
-          "kind" => "agent",
-          "reason" => "agent_exited",
-          "id" => "grok",
-          "title" => "Process in #{wt} exited without a completed turn_ended",
-          "detail" => s["detail"],
-          "since" => s["updated_at"],
-          "action" => "grok -c",
-          "worktree" => s["worktree"]
-        }
+        rows << stamp_needs_you(
+          {
+            "kind" => "agent",
+            "reason" => "agent_exited",
+            "id" => "grok",
+            "title" => "Process in #{wt} exited without a completed turn_ended",
+            "detail" => s["detail"],
+            "since" => s["updated_at"],
+            "action" => "grok -c",
+            "worktree" => s["worktree"]
+          },
+          source: "agent",
+          clear_key: agent_clear_key(s),
+          change_token: s["state"].to_s,
+          ask_from: nil
+        )
       elsif s["tool"] == "claude" && s["state"] == "waiting"
         wt = s["worktree"] || File.basename(s["cwd"].to_s)
-        rows << {
-          "kind" => "agent",
-          "reason" => "permission",
-          "id" => "claude",
-          "title" => "#{wt} is waiting on a permission prompt",
-          "detail" => s["detail"],
-          "since" => s["updated_at"],
-          "action" => "focus",
-          "worktree" => s["worktree"]
-        }
+        rows << stamp_needs_you(
+          {
+            "kind" => "agent",
+            "reason" => "permission",
+            "id" => "claude",
+            "title" => "#{wt} is waiting on a permission prompt",
+            "detail" => s["detail"],
+            "since" => s["updated_at"],
+            "action" => "focus",
+            "worktree" => s["worktree"]
+          },
+          source: "agent",
+          clear_key: agent_clear_key(s),
+          change_token: s["state"].to_s,
+          ask_from: nil
+        )
       end
     end
     rows
@@ -3042,17 +3440,23 @@ class OpsTabServer
       mention_ids[ident] = true
       actor = mention["actor"].to_s
       verb = mention["kind"] == "mention" ? "mentioned you in" : "commented on"
-      rows << {
-        "kind" => "linear",
-        "reason" => "linear_mention",
-        "id" => ident,
-        "title" => "#{actor} #{verb} #{ident}",
-        "detail" => mention["excerpt"],
-        "since" => mention["at"],
-        "action" => "reply",
-        "action_url" => mention["comment_url"],
-        "worktree" => matching_worktree_names(ident, wt_rows).first
-      }
+      rows << stamp_needs_you(
+        {
+          "kind" => "linear",
+          "reason" => "linear_mention",
+          "id" => ident,
+          "title" => "#{actor} #{verb} #{ident}",
+          "detail" => mention["excerpt"],
+          "since" => mention["at"],
+          "action" => "reply",
+          "action_url" => mention["comment_url"],
+          "worktree" => matching_worktree_names(ident, wt_rows).first
+        },
+        source: "linear",
+        clear_key: "linear:#{ident}:mention",
+        change_token: mention["comment_url"].to_s,
+        ask_from: nil
+      )
     end
     (linear["mine"] || []).each do |issue|
       next if mention_ids[issue["id"].to_s]
@@ -3061,17 +3465,23 @@ class OpsTabServer
       next if issue["last_comment_by"].to_s.empty?
 
       excerpt = issue["last_comment_excerpt"].to_s
-      rows << {
-        "kind" => "linear",
-        "reason" => "linear_question",
-        "id" => issue["id"],
-        "title" => "#{issue["last_comment_by"]} asked a question in #{issue["state"]}",
-        "detail" => "\"#{excerpt}\"",
-        "since" => issue["last_comment_at"],
-        "action" => "reply",
-        "action_url" => issue["url"],
-        "worktree" => (issue["worktrees"] || []).first
-      }
+      rows << stamp_needs_you(
+        {
+          "kind" => "linear",
+          "reason" => "linear_question",
+          "id" => issue["id"],
+          "title" => "#{issue["last_comment_by"]} asked a question in #{issue["state"]}",
+          "detail" => "\"#{excerpt}\"",
+          "since" => issue["last_comment_at"],
+          "action" => "reply",
+          "action_url" => issue["url"],
+          "worktree" => (issue["worktrees"] || []).first
+        },
+        source: "linear",
+        clear_key: "linear:#{issue["id"]}:question",
+        change_token: "at:#{issue["last_comment_at"]}",
+        ask_from: nil
+      )
     end
     rows
   end
@@ -3119,16 +3529,22 @@ class OpsTabServer
       # the weekly pool at 100 percent. The Bot's is hasAvailableUsage false.
       if seat["exhausted"]
         detail = seat["text"].to_s.sub(/\Aexhausted\s*(·\s*)?/, "")
-        rows << {
-          "kind" => "quota",
-          "reason" => "quota",
-          "id" => id,
-          "title" => "#{id} exhausted",
-          "detail" => detail,
-          "since" => seat["verified_at"],
-          "action" => spec["action"] || "/usage",
-          "worktree" => nil
-        }
+        rows << stamp_needs_you(
+          {
+            "kind" => "quota",
+            "reason" => "quota",
+            "id" => id,
+            "title" => "#{id} exhausted",
+            "detail" => detail,
+            "since" => seat["verified_at"],
+            "action" => spec["action"] || "/usage",
+            "worktree" => nil
+          },
+          source: "quota",
+          clear_key: "quota:#{seat["seat"]}",
+          change_token: quota_change_token(seat),
+          ask_from: nil
+        )
         next
       end
 
@@ -3136,16 +3552,22 @@ class OpsTabServer
       next unless pct.is_a?(Numeric) && pct >= QUOTA_NEEDS_YOU_AT
 
       n = pct.round
-      rows << {
-        "kind" => "quota",
-        "reason" => "quota",
-        "id" => id,
-        "title" => "#{seat["label"]} at #{n}%",
-        "detail" => seat["text"],
-        "since" => seat["verified_at"],
-        "action" => spec["action"] || "/usage",
-        "worktree" => nil
-      }
+      rows << stamp_needs_you(
+        {
+          "kind" => "quota",
+          "reason" => "quota",
+          "id" => id,
+          "title" => "#{seat["label"]} at #{n}%",
+          "detail" => seat["text"],
+          "since" => seat["verified_at"],
+          "action" => spec["action"] || "/usage",
+          "worktree" => nil
+        },
+        source: "quota",
+        clear_key: "quota:#{seat["seat"]}",
+        change_token: quota_change_token(seat),
+        ask_from: nil
+      )
     end
     rows
   end
@@ -3156,6 +3578,8 @@ class OpsTabServer
     rows = []
     (prs["mine"] || []).each { |pr| rows.concat(needs_you_mine(pr, wt_rows)) }
     (prs["review_requested"] || []).each { |pr| rows.concat(needs_you_review(pr, wt_rows)) }
+    # Not review_requested_team: that list is the card's capped group.
+    (prs["team_ask_candidates"] || []).each { |pr| rows.concat(needs_you_team(pr, wt_rows)) }
     rows
   end
 
@@ -3173,47 +3597,65 @@ class OpsTabServer
     id = "##{pr["number"]}"
     if pr["ci"] == "fail"
       detail = [pr["ci_failed_name"], pr["title"]].compact.reject { |s| s.to_s.empty? }.join(" · ")
-      rows << {
-        "kind" => "pr",
-        "reason" => "ci_failed",
-        "id" => id,
-        "title" => "CI failed on the last push",
-        "detail" => detail,
-        "since" => pr["ci_failed_at"] || pr["since"],
-        "action" => "logs",
-        "action_url" => pr["ci_url"],
-        "worktree" => wt
-      }
+      rows << stamp_needs_you(
+        {
+          "kind" => "pr",
+          "reason" => "ci_failed",
+          "id" => id,
+          "title" => "CI failed on the last push",
+          "detail" => detail,
+          "since" => pr["ci_failed_at"] || pr["since"],
+          "action" => "logs",
+          "action_url" => pr["ci_url"],
+          "worktree" => wt
+        },
+        source: "github",
+        clear_key: github_key(pr, "ci"),
+        change_token: ci_change_token(pr),
+        ask_from: nil
+      )
     end
     awaiting = pr["threads_awaiting_me"].to_i
     if awaiting.positive?
       who = pr["threads_last_by"] || "reviewer"
       noun = awaiting == 1 ? "thread" : "threads"
-      rows << {
-        "kind" => "pr",
-        "reason" => "review_thread",
-        "id" => id,
-        "title" => "#{awaiting} review #{noun} from #{who} with no reply",
-        "detail" => pr["title"],
-        "since" => pr["thread_comment_at"] || pr["since"],
-        "action" => "reply",
-        "action_url" => pr["thread_comment_url"],
-        "worktree" => wt
-      }
+      rows << stamp_needs_you(
+        {
+          "kind" => "pr",
+          "reason" => "review_thread",
+          "id" => id,
+          "title" => "#{awaiting} review #{noun} from #{who} with no reply",
+          "detail" => pr["title"],
+          "since" => pr["thread_comment_at"] || pr["since"],
+          "action" => "reply",
+          "action_url" => pr["thread_comment_url"],
+          "worktree" => wt
+        },
+        source: "github",
+        clear_key: github_key(pr, "threads"),
+        change_token: pr["thread_comment_url"].to_s,
+        ask_from: nil
+      )
     end
     if pr["review_decision"] == "CHANGES_REQUESTED"
       who = pr["changes_requested_by"] || "reviewer"
-      rows << {
-        "kind" => "pr",
-        "reason" => "changes_requested",
-        "id" => id,
-        "title" => "#{who} requested changes",
-        "detail" => pr["title"],
-        "since" => pr["changes_requested_at"] || pr["since"],
-        "action" => "open",
-        "action_url" => pr["url"],
-        "worktree" => wt
-      }
+      rows << stamp_needs_you(
+        {
+          "kind" => "pr",
+          "reason" => "changes_requested",
+          "id" => id,
+          "title" => "#{who} requested changes",
+          "detail" => pr["title"],
+          "since" => pr["changes_requested_at"] || pr["since"],
+          "action" => "open",
+          "action_url" => pr["url"],
+          "worktree" => wt
+        },
+        source: "github",
+        clear_key: github_key(pr, "changes"),
+        change_token: "at:#{pr["changes_requested_at"]}",
+        ask_from: nil
+      )
     end
     rows
   end
@@ -3230,23 +3672,81 @@ class OpsTabServer
 
     since = pr["since"]
     since = t if since.nil? || since.to_s.empty?
-    [{
-      "kind" => "pr",
-      "reason" => "review_request",
-      "id" => "##{pr["number"]}",
-      "title" => "#{pr["requested_by"] || pr["author"] || "someone"} asked for your review",
-      "detail" => pr["title"],
-      "since" => since,
-      # 14 days from the last update. Do not substitute the request-time
-      # `since`: that would expire a review asked for today on an old PR, and
-      # would keep a PR that has been quiet for two weeks.
-      "expires_from" => pr["updated_at"] || pr["created_at"] || t,
-      "action" => "review",
-      "action_url" => pr["url"],
-      "worktree" => worktree_for_pr(pr, wt_rows)
-    }]
+    [stamp_needs_you(
+      {
+        "kind" => "pr",
+        "reason" => "review_request",
+        "id" => "##{pr["number"]}",
+        "title" => "#{pr["requested_by"] || pr["author"] || "someone"} asked for your review",
+        "detail" => pr["title"],
+        "since" => since,
+        # 14 days from the last update. Do not substitute the request-time
+        # `since`: that would expire a review asked for today on an old PR, and
+        # would keep a PR that has been quiet for two weeks.
+        "expires_from" => pr["updated_at"] || pr["created_at"] || t,
+        "action" => "review",
+        "action_url" => pr["url"],
+        "worktree" => worktree_for_pr(pr, wt_rows)
+      },
+      source: "github",
+      clear_key: github_key(pr, "review"),
+      change_token: github_review_token(pr),
+      ask_from: "direct"
+    )]
   rescue ArgumentError
     []
+  end
+
+  # Fail closed. Missing labels, missing updated_at, or unknown review data
+  # emits nothing. No hour of grace: a team ask shows as soon as the snapshot
+  # has it. One row per pull request, named with every requesting team.
+  def team_ask_visible?(pr)
+    return false unless pr.is_a?(Hash)
+    return false unless pr["direct_review"] == false
+    return false unless pr["team_requested"] == true
+    return false if team_slugs(pr).empty?
+    return false if bot_author?(pr["author"])
+    return false if pr["viewer_is_author"] || me?(pr["author"])
+    return false unless pr["draft"] == false
+
+    labels = pr["labels"]
+    return false unless labels.is_a?(Array)
+    return false if labels.any? { |name| norm_label(name) == "prototype" }
+
+    updated = parse_time(pr["updated_at"])
+    return false if updated.nil?
+    return false if updated < (utc_now - TEAM_ASK_MAX_AGE)
+    return false unless pr["reviews_empty"] == true
+
+    true
+  end
+
+  def needs_you_team(pr, wt_rows)
+    return [] unless team_ask_visible?(pr)
+
+    slugs = team_slugs(pr)
+    names = team_names(pr, slugs)
+    since = pr["since"]
+    since = pr["updated_at"] if since.nil? || since.to_s.empty?
+    [stamp_needs_you(
+      {
+        "kind" => "pr",
+        "reason" => "team_ask",
+        "id" => "##{pr["number"]}",
+        "title" => "#{names.join(", ")} asked for a review",
+        "detail" => pr["title"],
+        "since" => since,
+        "expires_from" => pr["updated_at"],
+        "action" => "review",
+        "action_url" => pr["url"],
+        "worktree" => worktree_for_pr(pr, wt_rows)
+      },
+      source: "github",
+      clear_key: github_key(pr, "team"),
+      change_token: github_review_token(pr, teams: true),
+      ask_from: slugs.join(","),
+      dim: true
+    )]
   end
 
   # --- compose ------------------------------------------------------------
@@ -3289,12 +3789,284 @@ class OpsTabServer
   def needs_you_card(sessions, prs, linear, quota, rows)
     names = %w[local prs linear quota machines]
     # With nothing fetched, an empty list would assert that nothing needs you.
-    data = names.any? { |n| !source_data(n).nil? } ? build_needs_you(sessions, prs, linear, quota, rows, source_data("machines")) : nil
+    # Overlay GC stays off in that case too.
+    pending_keys = []
+    snoozed = 0
+    snoozed_keys = []
+    if names.any? { |n| !source_data(n).nil? }
+      raw = build_needs_you(sessions, prs, linear, quota, rows, source_data("machines"))
+      data, pending_keys, snoozed, snoozed_keys = apply_needs_you_overlay(raw, needs_you_availability)
+    else
+      data = nil
+    end
     errs = [@local_error, @prs_error, @quota_error, @machines_error].compact
     errs << @linear_error if @linear_error && @linear_error != NO_LINEAR_KEY
     error = errs.empty? ? nil : errs.uniq.join("; ")
     error = "no data yet" if error.nil? && data.nil?
-    { "data" => data, "fetched_at" => names.filter_map { |n| source(n)["fetched_at"] }.min, "error" => error }
+    {
+      "data" => data,
+      "fetched_at" => names.filter_map { |n| source(n)["fetched_at"] }.min,
+      "error" => error,
+      "pending_keys" => pending_keys,
+      "snoozed" => snoozed,
+      # clear_keys only, so the page can union this list with an optimistic
+      # snooze. /needs_you/summary stays counts-only and does not copy it.
+      "snoozed_keys" => snoozed_keys
+    }
+  end
+
+  def needs_you_availability
+    NEEDS_YOU_SNAPSHOT.to_h do |source_id, snapshot|
+      src = source(snapshot)
+      [source_id, {
+        "loaded" => !src["data"].nil?,
+        "fetched_at" => src["fetched_at"],
+        "refresh_started_at" => src["refresh_started_at"]
+      }]
+    end
+  end
+
+  def overlay_entries
+    return {} unless @overlay.is_a?(Hash) && @overlay["entries"].is_a?(Hash)
+
+    @overlay["entries"]
+  end
+
+  # Opinion 5. A refresh that started before the click does not confirm the
+  # hide, even when its result is published afterward. Snapshots store
+  # refresh_started_at for that. With no start stamp, fetched_at has to be
+  # after the click.
+  def pending_confirmed?(entry, avail)
+    avail = { "fetched_at" => avail } unless avail.is_a?(Hash)
+    current = parse_time(avail["fetched_at"])
+    return false if current.nil?
+
+    stored = parse_time(entry["source_fetched_at"])
+    return false if stored && current <= stored
+
+    click = parse_time(entry["at"])
+    started = parse_time(avail["refresh_started_at"])
+    if started
+      return false if click && started <= click
+    elsif click && current <= click
+      return false
+    end
+
+    true
+  end
+
+  # Packet backstop: a pending hide that never sees a refresh returns after
+  # 15 minutes so a stalled source cannot hide the row forever.
+  def pending_ttl_expired?(entry, avail, now)
+    at = parse_time(entry["at"])
+    return false if at.nil?
+    return false unless now > (at + PENDING_TTL)
+
+    !pending_confirmed?(entry, avail)
+  end
+
+  def until_change_due?(entry, row, now)
+    at = parse_time(entry["at"])
+    return true if at && now >= (at + UNTIL_CHANGE_BACKSTOP)
+
+    entry["token"].to_s != row["change_token"].to_s
+  end
+
+  def source_for_clear_key(key)
+    prefix = key.to_s.split(":", 2).first
+    NEEDS_YOU_SNAPSHOT.key?(prefix) ? prefix : nil
+  end
+
+  # Returns [visible_rows, entries, pending_keys, snoozed_count, snoozed_keys].
+  # snoozed_keys are clear_keys only. An entry is dropped for absence only
+  # when its own source is loaded. While that source is missing, the entry
+  # is kept and no clock rule runs.
+  def project_overlay(raw_rows, entries, availability, now = utc_now)
+    raw_by_key = {}
+    raw_rows.each do |row|
+      key = row["clear_key"].to_s
+      next if key.empty?
+
+      raw_by_key[key] = row
+    end
+    pending_keys = []
+    snoozed_keys = []
+    hidden = {}
+    kept = {}
+    entries.each do |key, entry|
+      next unless key.is_a?(String)
+      next unless entry.is_a?(Hash) && %w[pending until until_change].include?(entry["mode"].to_s)
+
+      source = entry["source"].to_s
+      source = source_for_clear_key(key).to_s if source.empty?
+      avail = availability[source] || { "loaded" => false }
+      unless avail["loaded"]
+        kept[key] = entry
+        next
+      end
+
+      row = raw_by_key[key]
+      next if row.nil?
+
+      case entry["mode"].to_s
+      when "pending"
+        if pending_confirmed?(entry, avail) || pending_ttl_expired?(entry, avail, now)
+          next
+        end
+
+        hidden[key] = true
+        pending_keys << key
+        kept[key] = entry
+      when "until"
+        until_at = parse_time(entry["until"])
+        next if until_at.nil? || now >= until_at
+
+        hidden[key] = true
+        snoozed_keys << key
+        kept[key] = entry
+      when "until_change"
+        next if until_change_due?(entry, row, now)
+
+        hidden[key] = true
+        snoozed_keys << key
+        kept[key] = entry
+      end
+    end
+    visible = raw_rows.reject { |row| hidden[row["clear_key"].to_s] }
+    [visible, kept, pending_keys, snoozed_keys.length, snoozed_keys]
+  end
+
+  def apply_needs_you_overlay(raw_rows, availability, now = utc_now)
+    before = overlay_entries
+    visible, kept, pending_keys, snoozed, snoozed_keys = project_overlay(raw_rows, before, availability, now)
+    @overlay = { "version" => 1, "entries" => kept }
+    begin
+      save_overlay if JSON.generate(before) != JSON.generate(kept)
+    rescue StandardError => e
+      warn "needs-you overlay write failed: #{e.message}"
+      @overlay = { "version" => 1, "entries" => before }
+    end
+    [visible, pending_keys, snoozed, snoozed_keys]
+  end
+
+  def age_seconds(since, now)
+    t = parse_time(since)
+    return nil if t.nil?
+
+    age = (now - t).to_i
+    age.negative? ? 0 : age
+  end
+
+  # Same edges as the page: exactly 1d, 3d, and 7d fall in the older bucket.
+  def age_bucket(since, now)
+    t = parse_time(since)
+    return nil if t.nil?
+
+    age = now - t
+    age = 0 if age.negative?
+    if age < 86_400
+      "lt_1d"
+    elsif age < 3 * 86_400
+      "d1_3"
+    elsif age < 7 * 86_400
+      "d3_7"
+    else
+      "gt_7d"
+    end
+  end
+
+  # Integers and null only. Does not copy a row, a string field, or a clear_key.
+  def summary_from(visible_rows, pending_count, snoozed_count, now = utc_now)
+    tiers = { "direct" => 0, "blocked" => 0, "team" => 0, "info" => 0 }
+    sources = SUMMARY_SOURCES.to_h { |name| [name, 0] }
+    ages = { "lt_1d" => 0, "d1_3" => 0, "d3_7" => 0, "gt_7d" => 0 }
+    oldest = nil
+    visible_rows.each do |row|
+      tier_key = SUMMARY_TIER_KEY[row["tier"].to_s]
+      if tier_key
+        tiers[tier_key] += 1
+      else
+        warn "needs-you summary: unexpected tier #{row["tier"].inspect}"
+      end
+      source_key = row["source"].to_s
+      if sources.key?(source_key)
+        sources[source_key] += 1
+      else
+        warn "needs-you summary: unexpected source #{source_key.inspect}"
+      end
+      bucket = age_bucket(row["since"], now)
+      ages[bucket] += 1 if bucket && ages.key?(bucket)
+      age_s = age_seconds(row["since"], now)
+      next if age_s.nil?
+
+      oldest = age_s if oldest.nil? || age_s > oldest
+    end
+    {
+      "tiers" => tiers,
+      "sources" => sources,
+      "ages" => ages,
+      "oldest_age_s" => oldest,
+      "pending" => pending_count.to_i,
+      "snoozed" => snoozed_count.to_i
+    }
+  end
+
+  def raw_needs_you
+    local = source("local")
+    wt_rows = compose_worktree_rows(local["data"], source_data("pings"))
+    sessions = local_sessions(local["data"])
+    linear = compose_linear(source_data("linear"), wt_rows)
+    build_needs_you(sessions, source_data("prs"), linear, source_data("quota"), wt_rows, source_data("machines"))
+  end
+
+  def request_body(req)
+    raw = req.body
+    text = raw.respond_to?(:read) ? raw.read.to_s : raw.to_s
+    return nil if text.bytesize > OVERLAY_BODY_MAX
+
+    text
+  end
+
+  def json_error(res, status, message)
+    res.status = status
+    res["Content-Type"] = "application/json"
+    res.body = JSON.generate({ "error" => message })
+  end
+
+  def record_overlay(clear_key, mode, until_value, now = utc_now)
+    previous = overlay_entries
+    return [:bad, "missing clear_key"] unless clear_key.is_a?(String) && !clear_key.empty? && clear_key.bytesize <= 512
+    return [:bad, "bad mode"] unless %w[pending until until_change].include?(mode)
+
+    raw = raw_needs_you
+    row = raw.find { |item| item["clear_key"] == clear_key }
+    return [:missing, "unknown clear_key"] if row.nil?
+
+    until_iso = nil
+    if mode == "until"
+      until_at = parse_time(until_value)
+      return [:bad, "bad until"] if until_at.nil?
+      return [:bad, "until in the past"] if until_at <= now
+      return [:bad, "until too far"] if until_at > (now + SNOOZE_UNTIL_MAX)
+
+      until_iso = iso(until_at)
+    end
+    avail = needs_you_availability[row["source"].to_s] || {}
+    entry = {
+      "mode" => mode,
+      "at" => iso(now),
+      "until" => until_iso,
+      "token" => row["change_token"].to_s,
+      "source_fetched_at" => avail["fetched_at"],
+      "source" => row["source"].to_s
+    }
+    @overlay = { "version" => 1, "entries" => previous.merge(clear_key => entry) }
+    save_overlay
+    [:ok, nil]
+  rescue StandardError => e
+    @overlay = { "version" => 1, "entries" => previous }
+    warn "needs-you overlay write failed: #{e.message}"
+    [:error, "write failed"]
   end
 
   def local_rows(local)
@@ -3406,6 +4178,66 @@ class OpsTabServer
     res.status = 200
     res["Content-Type"] = "application/json"
     res.body = JSON.generate(payload)
+  end
+
+  def handle_needs_you_summary(req, res)
+    return unless allow_origin!(req, res)
+    unless req.request_method == "GET"
+      json_error(res, 405, "method not allowed")
+      return
+    end
+
+    body = @mutex.synchronize do
+      names = %w[local prs linear quota machines]
+      if names.any? { |n| !source_data(n).nil? }
+        visible, pending_keys, snoozed = apply_needs_you_overlay(raw_needs_you, needs_you_availability)
+        summary_from(visible, pending_keys.length, snoozed)
+      else
+        summary_from([], 0, 0)
+      end
+    end
+    res.status = 200
+    res["Content-Type"] = "application/json"
+    res.body = JSON.generate(body)
+  end
+
+  def handle_needs_you_overlay(req, res)
+    return unless allow_origin!(req, res)
+    unless req.request_method == "POST"
+      json_error(res, 405, "method not allowed")
+      return
+    end
+
+    text = request_body(req)
+    if text.nil?
+      json_error(res, 400, "body too large")
+      return
+    end
+    begin
+      parsed = JSON.parse(text)
+    rescue JSON::ParserError
+      json_error(res, 400, "bad json")
+      return
+    end
+    unless parsed.is_a?(Hash)
+      json_error(res, 400, "bad json")
+      return
+    end
+
+    status = @mutex.synchronize do
+      record_overlay(parsed["clear_key"], parsed["mode"].to_s, parsed["until"])
+    end
+    case status[0]
+    when :ok
+      res.status = 204
+      res.body = ""
+    when :missing
+      json_error(res, 404, status[1])
+    when :bad
+      json_error(res, 400, status[1])
+    else
+      json_error(res, 500, status[1])
+    end
   end
 
   def allow_origin!(req, res)
