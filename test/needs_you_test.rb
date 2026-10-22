@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
-# Needs-you tiers and review-request age. No network.
+# Needs-you tier sort, review-request age, and expiry. No network.
+# The new tab draws the tiers and age badges; that is test/newtab_needs_you_test.js.
 # Run: ruby test/needs_you_test.rb
 require "fileutils"
 require "json"
@@ -19,18 +20,12 @@ require_relative "../server"
 Minitest.after_run { FileUtils.rm_rf(HOME_DIR) }
 
 class NeedsYouTest < Minitest::Test
-  NOW = Time.utc(2026, 10, 21, 12, 0, 0)
-
   def server
     OpsTabServer.allocate
   end
 
   def ago(seconds)
     (Time.now.utc - seconds).iso8601
-  end
-
-  def at_age(seconds)
-    (NOW - seconds).utc.iso8601
   end
 
   def test_kind_and_reason_map_to_one_tier
@@ -73,86 +68,6 @@ class NeedsYouTest < Minitest::Test
     ], rows.map { |r| r["title"] }
     refute_includes rows.map { |r| r["tier"] }, "team_ask"
     refute_includes rows.map { |r| r["detail"] }, "Team only"
-  end
-
-  def test_rendered_html_has_tier_counts_and_age_order
-    html = server.send(:render_needs_you_html, kitchen, now: Time.now.utc)
-    assert_includes html, "Needs you · 11"
-    assert_includes html, "Direct ask · 5"
-    assert_includes html, "Blocked on me · 2"
-    assert_includes html, "Informational · 4"
-    refute_includes html, "Team ask"
-    direct, blocked, info = html.index('data-tier="direct_ask"'), html.index('data-tier="blocked_on_me"'), html.index('data-tier="informational"')
-    assert direct < blocked
-    assert blocked < info
-    titles = [
-      "Sam asked for your review",
-      "Sam asked a question in Doing",
-      "1 review thread from sam with no reply",
-      "sam requested changes",
-      "Sam mentioned you in AB-1",
-      "CI failed on the last push",
-      "wt-wait is waiting on a permission prompt",
-      "Box bot link disconnected",
-      "Codex exhausted",
-      "Process in wt-dead exited without a completed turn_ended",
-      "Other bot link disconnected"
-    ]
-    positions = titles.map { |title| html.index(title) }
-    assert_equal positions, positions.compact
-    assert_equal positions, positions.sort
-    # A one-day-old ask still sits above a ten-day-old CI failure.
-    assert html.index("Sam mentioned you in AB-1") < html.index("CI failed on the last push")
-    # Quota is informational, ordered by age, not pinned to the end.
-    assert html.index("Codex exhausted") < html.index("Process in wt-dead exited without a completed turn_ended")
-    assert_includes html, "a &lt; b &amp; c"
-  end
-
-  def test_team_tier_subheader_renders_only_when_a_row_is_in_it
-    html = server.send(:render_needs_you_html, [
-      { "tier" => "team_ask", "id" => "t1", "title" => "Eng review", "since" => at_age(2 * NEEDS_YOU_DAY_S) },
-      { "kind" => "quota", "reason" => "quota", "id" => "q1", "title" => "Pool note", "since" => at_age(NEEDS_YOU_DAY_S) }
-    ], now: NOW)
-    assert_includes html, "Team ask · 1"
-    assert_includes html, "Informational · 1"
-    refute_includes html, "Direct ask"
-    refute_includes html, "Blocked on me"
-    assert html.index("Team ask") < html.index("Informational")
-  end
-
-  def test_age_buckets_break_at_exactly_one_three_and_seven_days
-    s = server
-    cases = {
-      0 => "age-lt-1d",
-      NEEDS_YOU_DAY_S - 1 => "age-lt-1d",
-      NEEDS_YOU_DAY_S => "age-1-3d",
-      (3 * NEEDS_YOU_DAY_S) - 1 => "age-1-3d",
-      3 * NEEDS_YOU_DAY_S => "age-3-7d",
-      (7 * NEEDS_YOU_DAY_S) - 1 => "age-3-7d",
-      7 * NEEDS_YOU_DAY_S => "age-gt-7d",
-      (7 * NEEDS_YOU_DAY_S) + 1 => "age-gt-7d"
-    }
-    cases.each do |seconds, bucket|
-      assert_equal bucket, s.send(:needs_you_age_bucket, NOW - seconds, NOW), "age #{seconds}s"
-      assert_equal bucket, s.send(:needs_you_age_bucket, at_age(seconds), NOW), "iso age #{seconds}s"
-    end
-    assert_equal "age-lt-1d", s.send(:needs_you_age_bucket, NOW + 60, NOW)
-    assert_equal "age-unknown", s.send(:needs_you_age_bucket, nil, NOW)
-    assert_equal "age-unknown", s.send(:needs_you_age_bucket, "not-a-time", NOW)
-
-    html = s.send(:render_needs_you_html, [
-      { "kind" => "quota", "id" => "under", "title" => "under a day", "since" => at_age(NEEDS_YOU_DAY_S - 1) },
-      { "kind" => "quota", "id" => "one", "title" => "one day", "since" => at_age(NEEDS_YOU_DAY_S) },
-      { "kind" => "quota", "id" => "three", "title" => "three days", "since" => at_age(3 * NEEDS_YOU_DAY_S) },
-      { "kind" => "quota", "id" => "seven", "title" => "seven days", "since" => at_age(7 * NEEDS_YOU_DAY_S) }
-    ], now: NOW)
-    assert_includes li(html, "under"), 'class="age age-lt-1d"'
-    assert_includes li(html, "one"), 'class="age age-1-3d"'
-    assert_includes li(html, "three"), 'class="age age-3-7d"'
-    assert_includes li(html, "seven"), 'class="age age-gt-7d"'
-    assert_includes li(html, "one"), ">1d<"
-    assert_includes li(html, "three"), ">3d<"
-    assert_includes li(html, "seven"), ">7d<"
   end
 
   def test_review_since_comes_from_the_viewers_request_event
@@ -273,13 +188,6 @@ class NeedsYouTest < Minitest::Test
   end
 
   private
-
-  def li(html, id)
-    found = html[/<li data-id="#{Regexp.escape(id)}">.*?<\/li>/m]
-    flunk "no row #{id}" if found.nil?
-
-    found
-  end
 
   def kitchen
     @kitchen ||= server.send(
