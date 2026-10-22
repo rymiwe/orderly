@@ -463,3 +463,121 @@ test("a poll started before the click does not bring the row back", async () => 
   assert.equal(needs.textContent.includes("Review the latch"), false, "stale poll restored the row");
   assert.match(needs.all().find((n) => n.className === "pending-mark").textContent, /pending · 1/);
 });
+
+// click → GET captures the pre-save list → POST succeeds → that GET resolves
+// (row stays hidden) → a GET started after the POST reconciles it.
+async function pollStraddlingSave(click, later, markClass) {
+  const rowData = {
+    tier: "direct_ask",
+    id: "#4",
+    title: "Review the latch",
+    since: isoBefore(3 * 60 * 60 * 1000),
+    kind: "pr",
+    clear_key: "github:acme/widgets#4:review",
+    action: "review",
+    action_url: "https://example.test/acme/widgets/4"
+  };
+  const events = [];
+  let gets = 0;
+  let releasePost;
+  let releaseMid;
+  let releaseLater;
+  function cards(data) {
+    return {
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({
+        cards: {
+          needs_you: {
+            fetched_at: new Date(NOW).toISOString(),
+            error: null,
+            data,
+            pending_keys: [],
+            snoozed: 0
+          }
+        }
+      })
+    };
+  }
+  const needs = await renderNeeds([rowData], {}, {
+    fetch: (_url, opts) => {
+      if (opts && opts.method === "POST") {
+        return new Promise((resolve) => {
+          releasePost = () => {
+            events.push("post-ok");
+            resolve({ ok: true, status: 204, json: () => Promise.resolve({}) });
+          };
+        });
+      }
+      gets += 1;
+      if (gets === 1) return Promise.resolve(cards([rowData]));
+      if (gets === 2) {
+        events.push("get-start");
+        return new Promise((resolve) => {
+          releaseMid = () => {
+            events.push("get-resolve");
+            resolve(cards([rowData]));
+          };
+        });
+      }
+      events.push("later-get-start");
+      return new Promise((resolve) => {
+        releaseLater = () => resolve(cards(later === "present" ? [rowData] : []));
+      });
+    }
+  });
+  const line = row(needs, "Review the latch");
+  click(line);
+  assert.equal(needs.textContent.includes("Review the latch"), false);
+  needs._fire("visibilitychange");
+  assert.equal(gets, 2);
+  assert.deepEqual(events, ["get-start"]);
+  releasePost();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(events, ["get-start", "post-ok"]);
+  releaseMid();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(events, ["get-start", "post-ok", "get-resolve"]);
+  assert.equal(needs.textContent.includes("Review the latch"), false, "poll started before the save cleared the row");
+  const held = needs.all().find((n) => n.className === markClass);
+  assert.ok(held, markClass);
+  needs._fire("visibilitychange");
+  assert.equal(gets, 3);
+  assert.equal(events[events.length - 1], "later-get-start");
+  assert.ok(events.indexOf("later-get-start") > events.indexOf("post-ok"));
+  releaseLater();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  return needs;
+}
+
+function clickHide(line) {
+  const act = line.all().find((n) => n.className === "act");
+  assert.ok(act, "action control");
+  act.dispatch("click");
+}
+
+function clickSnooze(line) {
+  const btn = line.all().find((n) => n.className === "snooze-btn" && n.textContent === "1h");
+  assert.ok(btn, "snooze control");
+  btn.dispatch("click");
+}
+
+test("a poll started before the hide commits does not clear it", async () => {
+  const present = await pollStraddlingSave(clickHide, "present", "pending-mark");
+  assert.ok(present.textContent.includes("Review the latch"), "ask still present should return");
+  assert.equal(present.all().some((n) => n.className === "pending-mark"), false);
+
+  const absent = await pollStraddlingSave(clickHide, "absent", "pending-mark");
+  assert.equal(absent.textContent.includes("Review the latch"), false, "absent ask should stay gone");
+  assert.equal(absent.all().some((n) => n.className === "pending-mark"), false);
+});
+
+test("a poll started before the snooze commits does not clear it", async () => {
+  const present = await pollStraddlingSave(clickSnooze, "present", "snooze-mark");
+  assert.ok(present.textContent.includes("Review the latch"), "ask still present should return");
+  assert.equal(present.all().some((n) => n.className === "snooze-mark"), false);
+
+  const absent = await pollStraddlingSave(clickSnooze, "absent", "snooze-mark");
+  assert.equal(absent.textContent.includes("Review the latch"), false, "absent ask should stay gone");
+  assert.equal(absent.all().some((n) => n.className === "snooze-mark"), false);
+});
