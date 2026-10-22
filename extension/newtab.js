@@ -75,6 +75,10 @@
   var optimisticSnooze = {};
   var inflight = {};
   var overlayError = null;
+  // Bumps on each hide or snooze. A /cards response records the value at
+  // request start and must not clear a newer optimistic entry.
+  var overlayEpoch = 0;
+  var keyEpoch = {};
 
   var qEl = document.getElementById("q");
   var metaEl = document.getElementById("meta");
@@ -540,9 +544,12 @@
   function postOverlay(body) {
     var key = body.clear_key;
     inflight[key] = (inflight[key] || 0) + 1;
+    // keepalive so a link navigation does not cancel the save. The click
+    // still does not wait on the response.
     fetch(overlayUrl(), {
       method: "POST",
       cache: "no-store",
+      keepalive: true,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body)
     }).then(function (res) {
@@ -558,24 +565,27 @@
     });
   }
 
-  // Packet reconciliation: pending keys from the server, plus POSTs still in
-  // flight. A poll that started before the click and lands after the POST is
-  // not specially ignored (opinion 2). The in-flight refresh is handled on
-  // the server (opinion 5).
-  function reconcileOverlay() {
+  // Server pending_keys, plus a hide the page has not yet seen reflected.
+  // responseEpoch is the overlay epoch when this /cards request started. A
+  // response from before the click must not clear that click.
+  function reconcileOverlay(responseEpoch) {
     var c = card("needs_you");
-    var serverPending = {};
     var nextPending = {};
-    ((c && c.pending_keys) || []).forEach(function (k) { serverPending[String(k)] = true; });
-    Object.keys(serverPending).forEach(function (k) { nextPending[k] = true; });
+    ((c && c.pending_keys) || []).forEach(function (k) { nextPending[String(k)] = true; });
     Object.keys(optimisticPending).forEach(function (k) {
-      if (inflight[k] > 0) nextPending[k] = true;
+      if (inflight[k] > 0 || (keyEpoch[k] != null && responseEpoch < keyEpoch[k])) nextPending[k] = true;
     });
     optimisticPending = nextPending;
     Object.keys(optimisticSnooze).forEach(function (k) {
       if (inflight[k] > 0) return;
+      if (keyEpoch[k] != null && responseEpoch < keyEpoch[k]) return;
       delete optimisticSnooze[k];
     });
+  }
+
+  function noteMutation(key) {
+    overlayEpoch += 1;
+    keyEpoch[key] = overlayEpoch;
   }
 
   function hiddenMaps(c) {
@@ -597,6 +607,7 @@
     var key = rowKey(row);
     if (ev && ev.preventDefault) ev.preventDefault();
     if (!key) return;
+    noteMutation(key);
     delete optimisticSnooze[key];
     optimisticPending[key] = true;
     overlayError = null;
@@ -612,6 +623,7 @@
     var key = rowKey(row);
     var body;
     if (!key) return;
+    noteMutation(key);
     delete optimisticPending[key];
     optimisticSnooze[key] = true;
     overlayError = null;
@@ -1727,6 +1739,7 @@
 
   function load() {
     var n = ++loadSeq;
+    var seenEpoch = overlayEpoch;
     fetch(CARDS_URL, { cache: "no-store" }).then(function (res) {
       if (!res.ok) throw new Error("HTTP " + res.status);
       return res.json();
@@ -1734,7 +1747,7 @@
       if (n !== loadSeq) return;
       payload = data;
       fetchError = null;
-      reconcileOverlay();
+      reconcileOverlay(seenEpoch);
       render();
     }).catch(function (err) {
       if (n !== loadSeq) return;
