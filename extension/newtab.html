@@ -70,6 +70,13 @@ code,.mono{font-family:var(--mono);font-size:12.5px}
 .needs .age-3-7d{color:var(--serious);border-color:color-mix(in srgb, var(--serious) 60%, var(--line))}
 .needs .age-gt-7d{color:var(--crit);border-color:color-mix(in srgb, var(--crit) 60%, var(--line))}
 .needs .age-unknown{color:var(--muted)}
+.needs li.dim,.needs li.dim .why,.needs li.dim .act{color:var(--muted)}
+.needs button.act{background:none;border:0;padding:0;cursor:pointer}
+.needs .snooze{display:inline-flex;gap:8px;margin-left:8px}
+.needs .snooze-btn{background:none;border:0;padding:0;cursor:pointer;font-family:var(--mono);font-size:10.5px;color:var(--muted)}
+.needs .overlay-marks{margin:0 0 8px}
+.needs li.pending,.needs li.snoozed{color:var(--muted)}
+.needs .pending-mark,.needs .snooze-mark{font-family:var(--mono);font-size:11px;letter-spacing:.04em;text-transform:uppercase}
 
 .cols{display:grid;grid-template-columns:1.2fr 1.15fr .95fr;gap:0}
 .col{padding:12px 14px;border-right:1px solid var(--line);min-width:0}

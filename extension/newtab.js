@@ -60,6 +60,10 @@
   var prTab = "mine";
   var pollTimer = null;
   var loadSeq = 0;
+  var optimisticPending = {};
+  var optimisticSnooze = {};
+  var inflight = {};
+  var overlayError = null;
 
   var qEl = document.getElementById("q");
   var metaEl = document.getElementById("meta");
@@ -400,11 +404,132 @@
     metaEl.replaceChildren.apply(metaEl, kids);
   }
 
+  function overlayUrl() {
+    return CARDS_URL.replace(/\/cards$/, "/needs_you/overlay");
+  }
+
+  function rowKey(row) {
+    return row && row.clear_key ? String(row.clear_key) : "";
+  }
+
+  function postOverlay(body) {
+    var key = body.clear_key;
+    inflight[key] = (inflight[key] || 0) + 1;
+    fetch(overlayUrl(), {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (res) {
+      inflight[key] = Math.max(0, (inflight[key] || 1) - 1);
+      if (!res.ok) {
+        overlayError = "could not save";
+        render();
+      }
+    }).catch(function () {
+      inflight[key] = Math.max(0, (inflight[key] || 1) - 1);
+      overlayError = "could not save";
+      render();
+    });
+  }
+
+  // Packet reconciliation: pending keys from the server, plus POSTs still in
+  // flight. A poll that started before the click and lands after the POST is
+  // not specially ignored (opinion 2). The in-flight refresh is handled on
+  // the server (opinion 5).
+  function reconcileOverlay() {
+    var c = card("needs_you");
+    var serverPending = {};
+    var nextPending = {};
+    ((c && c.pending_keys) || []).forEach(function (k) { serverPending[String(k)] = true; });
+    Object.keys(serverPending).forEach(function (k) { nextPending[k] = true; });
+    Object.keys(optimisticPending).forEach(function (k) {
+      if (inflight[k] > 0) nextPending[k] = true;
+    });
+    optimisticPending = nextPending;
+    Object.keys(optimisticSnooze).forEach(function (k) {
+      if (inflight[k] > 0) return;
+      delete optimisticSnooze[k];
+    });
+  }
+
+  function hiddenMaps(c) {
+    var pending = {};
+    var snooze = {};
+    ((c && c.pending_keys) || []).forEach(function (k) { pending[String(k)] = true; });
+    Object.keys(optimisticPending).forEach(function (k) { pending[k] = true; });
+    Object.keys(optimisticSnooze).forEach(function (k) { snooze[k] = true; });
+    return { pending: pending, snooze: snooze };
+  }
+
+  function mapSize(obj) {
+    var n = 0;
+    Object.keys(obj).forEach(function () { n += 1; });
+    return n;
+  }
+
+  function onAction(row, ev) {
+    var key = rowKey(row);
+    if (ev && ev.preventDefault) ev.preventDefault();
+    if (!key) return;
+    delete optimisticSnooze[key];
+    optimisticPending[key] = true;
+    overlayError = null;
+    render();
+    postOverlay({ clear_key: key, mode: "pending" });
+    if (row.action_url && /^https?:\/\//i.test(String(row.action_url)) &&
+        window.location && typeof window.location.assign === "function") {
+      window.location.assign(row.action_url);
+    }
+  }
+
+  function onSnooze(row, seconds) {
+    var key = rowKey(row);
+    var body;
+    if (!key) return;
+    delete optimisticPending[key];
+    optimisticSnooze[key] = true;
+    overlayError = null;
+    render();
+    if (seconds == null) {
+      body = { clear_key: key, mode: "until_change" };
+    } else {
+      body = { clear_key: key, mode: "until", until: new Date(Date.now() + seconds * 1000).toISOString() };
+    }
+    postOverlay(body);
+  }
+
+  function snoozeControls(row) {
+    if (!rowKey(row)) return null;
+    function btn(label, seconds) {
+      var b = el("button", { class: "snooze-btn", type: "button" }, label);
+      b.addEventListener("click", function (ev) {
+        if (ev && ev.preventDefault) ev.preventDefault();
+        onSnooze(row, seconds);
+      });
+      return b;
+    }
+    return el("span", { class: "snooze" },
+      btn("1h", 3600),
+      btn("4h", 4 * 3600),
+      btn("1d", 86400),
+      btn("until change · 14d", null)
+    );
+  }
+
   function renderNeedRow(row, now) {
     var age = row.since ? formatAge(row.since, now) : "";
     var bucket = ageBucket(row.since, now);
-    return el("li", null,
-      el("span", { class: "id" },
+    var action;
+    var cls = row.dim ? "row dim" : "row";
+    if (row.action_url && /^https?:\/\//i.test(String(row.action_url))) {
+      action = el("a", { class: "act", href: row.action_url }, row.action || "");
+    } else {
+      action = el("button", { class: "act", type: "button" }, row.action || "");
+    }
+    action.addEventListener("click", function (ev) { onAction(row, ev); });
+    return el("li", { class: cls },
+      el("span", { class: row.dim ? "id dim" : "id" },
         row.id || "",
         row.kind === "pr" ? el("span", { class: "chip" }, "gh") : null,
         row.kind === "linear" ? el("span", { class: "chip" }, "linear") : null,
@@ -416,15 +541,30 @@
         row.detail ? el("span", { class: "why" }, row.detail) : null
       ),
       el("span", { class: "age " + bucket }, age),
-      row.action_url
-        ? el("a", { class: "act", href: row.action_url }, row.action || "")
-        : el("span", { class: "act" }, row.action || "")
+      el("span", { class: "acts" }, action, snoozeControls(row))
     );
+  }
+
+  function overlayMarks(pendingN, snoozedN) {
+    var marks = [];
+    if (pendingN) {
+      marks.push(el("li", { class: "row pending" },
+        el("span", { class: "pending-mark" }, "pending · " + pendingN),
+        el("span", null, "hidden until that source refreshes")
+      ));
+    }
+    if (snoozedN) {
+      marks.push(el("li", { class: "row snoozed" },
+        el("span", { class: "snooze-mark" }, "snoozed · " + snoozedN)
+      ));
+    }
+    if (!marks.length) return null;
+    return el("ol", { class: "overlay-marks" }, marks);
   }
 
   function renderNeeds(now) {
     var c = card("needs_you");
-    var rows, shown, headRight, kids;
+    var rows, shown, headRight, kids, maps, pendingN, snoozedN;
     var countLabel = "Needs you";
     if (!hasData(c)) {
       needsEl.replaceChildren(
@@ -437,16 +577,27 @@
       return;
     }
     rows = Array.isArray(c.data) ? c.data : [];
+    maps = hiddenMaps(c);
+    rows = rows.filter(function (r) {
+      var k = rowKey(r);
+      if (!k) return true;
+      return !maps.pending[k] && !maps.snooze[k];
+    });
     shown = rows.filter(function (r) { return matches(needHay(r), query); });
+    pendingN = mapSize(maps.pending);
+    snoozedN = ((c && c.snoozed) || 0) + mapSize(maps.snooze);
     countLabel = "Needs you · " + shown.length;
     headRight = "priority, then oldest";
     if (staleBits(c).length) headRight = staleBits(c).join(" · ");
+    if (overlayError) headRight = overlayError;
     kids = [
       el("div", { class: "head" },
         el("span", { class: "eyebrow" }, countLabel),
         el("span", { class: "note" }, headRight)
       )
     ];
+    var marks = overlayMarks(pendingN, snoozedN);
+    if (marks) kids.push(marks);
     NEED_TIERS.forEach(function (tier) {
       var group = shown.filter(function (r) { return needTier(r) === tier.id; });
       if (!group.length) return;
@@ -1381,6 +1532,7 @@
       if (n !== loadSeq) return;
       payload = data;
       fetchError = null;
+      reconcileOverlay();
       render();
     }).catch(function (err) {
       if (n !== loadSeq) return;
