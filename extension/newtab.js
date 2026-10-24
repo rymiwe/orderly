@@ -1146,6 +1146,25 @@
     return headers;
   }
 
+  // A pool that moved in the last 30 minutes glows (burn-soft); one that also
+  // rose at least one pace over two hours glows harder (burn-strong). The
+  // server decides the level from seat-usage's history; this only maps it.
+  var BURN_TITLE = { soft: "burning in the last 30 min", strong: "burning above pace in the last 30 min" };
+  function burnClass(seat, live) {
+    return live && BURN_TITLE[seat.burn] ? " burn-" + seat.burn : "";
+  }
+
+  // One line per local tool with a working session: label and pool, no rates.
+  function driversBlock(list) {
+    if (!Array.isArray(list) || !list.length) return null;
+    return el("div", { class: "drivers" }, el("div", { class: "eyebrow" }, "Running now"),
+      list.map(function (d) {
+        var n = Number(d.sessions) > 1 ? " (" + Number(d.sessions) + ")" : "";
+        var text = String(d.label || "") + n + " · " + String(d.pool || "");
+        return el("div", { class: "drv", title: text }, text);
+      }));
+  }
+
   function renderRail(now) {
     var c = card("quota");
     var seats;
@@ -1276,9 +1295,13 @@
       detail = el("span", { class: "v" });
       parts.forEach(function (p, i) { if (i) detail.append(" · "); detail.append(p); });
       detail.title = absent && seat.note ? seat.note + " " + detail.textContent : detail.textContent;
-      rows.push(el("div", { class: rowCls, "data-seat": seat.seat }, seatLabel(seat), bar, detail));
+      // The burn level only changes the row's class; the row has no burn text.
+      if (live && BURN_TITLE[seat.burn]) detail.title += " · " + BURN_TITLE[seat.burn];
+      rows.push(el("div", { class: rowCls + burnClass(seat, live), "data-seat": seat.seat, "data-burn": live && BURN_TITLE[seat.burn] ? seat.burn : null }, seatLabel(seat), bar, detail));
     });
     railEl.replaceChildren.apply(railEl, [hostSuggestionLine(c && c.data && c.data.host_suggestion)].concat(rows));
+    var drivers = driversBlock(c && c.data && c.data.drivers);
+    if (drivers) railEl.appendChild(drivers);
     railEl.appendChild(el("div", { class: "rail-key" },
       "dashed = metered · dotted = builder only · \u2605 first usable pool for the family",
       el("span", { class: "state" })));

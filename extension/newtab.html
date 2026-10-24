@@ -145,6 +145,20 @@ button.chip:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .band-hdr .caps{color:var(--crit)}
 .band-hdr.claude{--vendor:var(--v-claude)} .band-hdr.codex{--vendor:var(--v-codex)} .band-hdr.cursor{--vendor:var(--v-cursor)} .band-hdr.grok{--vendor:var(--v-grok)} .band-hdr.muse{--vendor:var(--v-muse)} .band-hdr.google{--vendor:var(--v-google)}
 .seat.vendor-start:not(:first-child){margin-top:6px}
+/* Burn glow: whole row, two levels. Strong also has a thicker left edge, so the level is not colour alone. */
+.seat.burn-soft,.seat.burn-strong{position:relative;isolation:isolate}
+.seat.burn-soft::after,.seat.burn-strong::after{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;border-radius:inherit;animation:burn-breathe var(--burn-period) ease-in-out infinite alternate}
+.seat.burn-soft{--burn:var(--warn);--burn-period:4s;--burn-lo:.25}
+.seat.burn-soft::after{background:color-mix(in srgb,var(--burn) 7%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--burn) 35%,transparent),0 0 8px color-mix(in srgb,var(--burn) 18%,transparent)}
+.seat.burn-strong{--burn:var(--crit);--burn-period:2s;--burn-lo:.35;border-left-width:6px;padding-left:5px}
+.seat.burn-strong::after{background:color-mix(in srgb,var(--burn) 11%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--burn) 60%,transparent),0 0 14px color-mix(in srgb,var(--burn) 32%,transparent)}
+@keyframes burn-breathe{from{opacity:var(--burn-lo)}to{opacity:1}}
+@media (prefers-reduced-motion: reduce){
+  .seat.burn-soft::after,.seat.burn-strong::after{animation:none;opacity:1}
+}
+.drivers{grid-column:1/-1;margin-top:10px;padding-top:6px;border-top:1px solid var(--line)}
+.drivers .eyebrow{margin:0 0 3px}
+.drv{font-family:var(--mono);font-size:11px;color:var(--ink-2);padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .seat:hover{background:color-mix(in srgb,var(--vendor,transparent) 18%,transparent)}
 .meter{position:relative;height:6px}
 .meter .track{position:absolute;top:0;bottom:0;width:50%;border-radius:3px;background:color-mix(in srgb,var(--ink) 14%,transparent)}
