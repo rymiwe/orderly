@@ -79,6 +79,20 @@ SEAT_USAGE_LOCK = File.join(SEAT_USAGE_DIR, ".lock")
 SEAT_USAGE_BIN = File.join(HOME, ".local/bin/seat-usage")
 SEAT_USAGE_STALE = 600
 SEAT_USAGE_TIMEOUT = 90
+# seat-usage appends one line per pool on every fresh read. Only its tail is read.
+SEAT_USAGE_HISTORY = File.join(HOME, ".local/state/seat-usage/history.jsonl")
+HISTORY_TAIL_BYTES = 131_072
+# A pool burns when it rose within BURN_MOVED_S, and burns hard when it also
+# rose at least one pace over BURN_PACE_S. No reading for BURN_STALE_S: no burn.
+BURN_MOVED_S = 30 * 60
+BURN_PACE_S = 2 * 3600
+BURN_STALE_S = 20 * 60
+# Active local sessions name the pool they draw. The grok CLI builds on SuperGrok.
+DRIVER_TOOLS = {
+  "claude" => ["Claude Code", "Claude"],
+  "codex" => ["Codex", "Codex"],
+  "grok" => ["Grok CLI", "SuperGrok"]
+}.freeze
 # Machine availability is a different cache from seat-usage. grokbot in the
 # quota card stays the Bot's weekly allowance. Link state is never inferred
 # from the host heartbeat.
@@ -1686,8 +1700,13 @@ class OpsTabServer
       known = QUOTA_GROUPS[group["id"]]
       known ? instance_exec(cache, verified, &known) : row_quota_seats(cache, verified, group)
     end
+    history = quota_history
+    now = Time.now.to_f
     {
-      "seats" => seats.map { |seat| seat.merge(quota_renewal(cache, seat["seat"], seat["subscription"])).merge(quota_read(cache, seat)) },
+      "seats" => seats.map do |seat|
+        seat.merge(quota_renewal(cache, seat["seat"], seat["subscription"])).merge(quota_read(cache, seat))
+            .merge("burn" => quota_burn(history, seat, now))
+      end,
       "host_suggestion" => fetch_host_suggestion
     }
   end
@@ -1874,6 +1893,98 @@ class OpsTabServer
     { "verified_at" => iso(Time.at(Float(stamp))), "read_failed" => false }
   rescue ArgumentError, TypeError
     { "verified_at" => nil, "read_failed" => true }
+  end
+
+  # Which seat-usage history pools feed each rail seat's burn. A seat with a 5h
+  # window lists both; the higher level wins. Muse and Codex 5h have no history.
+  QUOTA_HISTORY_POOLS = {
+    "claude_weekly" => ["claude weekly all", "claude 5h"],
+    "claude_fable" => ["claude weekly Fable"],
+    "codex" => ["chatgpt weekly"],
+    "cursor_models" => ["cursor models"],
+    "cursor_other" => ["cursor other models"],
+    "grokbot" => ["grokbot week"],
+    "supergrok" => ["grok week"]
+  }.freeze
+  # Rows built from seat rows (google_argon_week) name their pool in the id.
+  GOOGLE_HISTORY_LABELS = { "argon" => "Argon", "gemini" => "Gemini", "claudegpt" => "Claude/GPT" }.freeze
+  BURN_RANK = { "none" => 0, "soft" => 1, "strong" => 2 }.freeze
+
+  def quota_history_pools(seat_id)
+    return QUOTA_HISTORY_POOLS[seat_id] if QUOTA_HISTORY_POOLS.key?(seat_id)
+
+    m = /\Agoogle_([a-z]+)_(week|5h)\z/.match(seat_id.to_s)
+    label = m && GOOGLE_HISTORY_LABELS[m[1]]
+    label ? ["google #{label} #{m[2] == "week" ? "weekly" : "5h"}"] : []
+  end
+
+  # The tail of seat-usage's history, grouped by pool and sorted by read time.
+  # A missing or unreadable file is no history, never an error.
+  def quota_history
+    rows = parse_jsonl_tail(SEAT_USAGE_HISTORY, HISTORY_TAIL_BYTES)
+    rows.each_with_object(Hash.new { |h, k| h[k] = [] }) do |r, by|
+      next unless r.is_a?(Hash) && r["pool"].is_a?(String)
+      next unless r["used_pct"].is_a?(Numeric) && r["read_ts"].is_a?(Numeric)
+
+      by[r["pool"]] << r
+    end.each_value { |list| list.sort_by! { |r| r["read_ts"] } }
+  rescue StandardError
+    {}
+  end
+
+  # none, soft, or strong for one rail seat. Only a live seat can burn.
+  def quota_burn(history, seat, now)
+    return "none" unless seat["status"] == "live" && history.is_a?(Hash)
+
+    quota_history_pools(seat["seat"]).map { |pool| pool_burn(history[pool], now) }
+                                     .max_by { |level| BURN_RANK[level] } || "none"
+  end
+
+  # soft: used_pct rose within the last BURN_MOVED_S. strong: soft, and the rise
+  # over the trailing BURN_PACE_S is at least one pace (100% over the window).
+  # Only rows on the newest reading's reset count, so a reset is never a move.
+  # A span with no reading before it counts as the full BURN_PACE_S, so a short
+  # history cannot overstate the rate.
+  def pool_burn(rows, now)
+    return "none" unless rows.is_a?(Array) && !rows.empty?
+
+    newest = rows.last
+    return "none" if now - newest["read_ts"] > BURN_STALE_S
+
+    same = rows.select { |r| same_reset?(r, newest) }
+    moved_from = now - BURN_MOVED_S
+    recent = same.select { |r| r["read_ts"] >= moved_from }
+    base = same.reverse.find { |r| r["read_ts"] < moved_from } || (recent.size > 1 ? recent.first : nil)
+    return "none" unless base && recent.any? { |r| r["used_pct"] > base["used_pct"] }
+
+    window = newest["window_s"]
+    return "soft" unless window.is_a?(Numeric) && window.positive?
+
+    pace_from = now - BURN_PACE_S
+    start = same.reverse.find { |r| r["read_ts"] <= pace_from } || same.first
+    hours = [(newest["read_ts"] - start["read_ts"]), BURN_PACE_S].max / 3600.0
+    rate = (newest["used_pct"] - start["used_pct"]) / hours
+    rate >= 100.0 / (window / 3600.0) ? "strong" : "soft"
+  end
+
+  def same_reset?(row, newest)
+    a = row["reset_ts"]
+    b = newest["reset_ts"]
+    return a.nil? && b.nil? unless a.is_a?(Numeric) && b.is_a?(Numeric)
+
+    (a - b).abs <= 3600
+  end
+
+  # One line per local tool with a working session, for the quota card's
+  # running-now list. Labels and pools only: no paths, worktrees, or ids.
+  def burn_drivers(sessions)
+    working = (sessions || []).select { |s| s.is_a?(Hash) && s["state"] == "working" }
+    DRIVER_TOOLS.filter_map do |tool, (label, pool)|
+      n = working.count { |s| s["tool"] == tool }
+      next if n.zero?
+
+      { "label" => label, "pool" => pool, "sessions" => n }
+    end
   end
 
   def cache_ts_iso(cache)
@@ -3128,9 +3239,15 @@ class OpsTabServer
       "needs_you" => needs_you_card(sessions, prs, linear, quota, rows),
       "prs" => card(prs, source("prs")["fetched_at"], @prs_error),
       "linear" => card(linear, source("linear")["fetched_at"], @linear_error),
-      "quota" => card(quota, source("quota")["fetched_at"], @quota_error),
+      "quota" => card(quota_with_drivers(quota, sessions), source("quota")["fetched_at"], @quota_error),
       "machines" => card(machines, source("machines")["fetched_at"], @machines_error)
     }
+  end
+
+  # Drivers come from the local sessions on every compose, so the list is as
+  # fresh as the agents card while the quota numbers keep their own tick.
+  def quota_with_drivers(quota, sessions)
+    quota.is_a?(Hash) ? quota.merge("drivers" => burn_drivers(sessions)) : quota
   end
 
   def card(data, fetched_at, error)
