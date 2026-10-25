@@ -69,6 +69,10 @@ const dotOf = (r) => {
   const v = detail(r);
   return v ? v.all().find((n) => n.attrs && Object.prototype.hasOwnProperty.call(n.attrs, "data-dot")) : null;
 };
+const slotOf = (r) => {
+  const v = detail(r);
+  return v ? v.all().find((n) => n.className && n.className.split(/\s+/).includes("dot-none")) : null;
+};
 // resets_at that puts `elapsed` percent of windowS behind now. A few
 // milliseconds of render delay does not move the percent.
 function resetsForElapsed(elapsed, windowS = 604800) {
@@ -201,19 +205,40 @@ const tests = {
       if (c.name === "caps early") assert.ok(/caps /.test(v.textContent), v.textContent);
     }
   },
-  async inactive_and_non_live_rows_get_no_dot() {
+  async inactive_percent_rows_reserve_an_empty_slot() {
     const seats = [
       painted({ seat: "idle", label: "Idle", burn: "none", pace: "under", percent: 30, text: "30%", elapsed: 50 }),
       painted({ seat: "quiet", label: "Quiet", burn: "soft", status: "unknown", percent: null, text: "unknown", pace: "ahead", elapsed: 50 }),
       painted({ seat: "gone", label: "Gone", burn: "strong", status: "absent", percent: null, text: "not on this plan", pace: "ahead", elapsed: 50 })
     ];
     const rail = await run(quota(seats, []));
-    for (const id of ["idle", "quiet", "gone"]) {
+    const idle = row(rail, "idle");
+    const slot = slotOf(idle);
+    assert.ok(slot, "idle percent row has no slot");
+    assert.strictEqual(slot.className, "dot dot-none");
+    assert.strictEqual(slot.attrs["aria-hidden"], "true");
+    assert.ok(!("title" in slot.attrs), "placeholder has a title");
+    assert.ok(!("data-dot" in slot.attrs), "placeholder is a coloured dot");
+    assert.strictEqual(dotOf(idle), undefined, "idle drew a coloured dot");
+    const v = detail(idle);
+    assert.strictEqual(v.children[0], slot, "slot is not beside the percentage");
+    assert.strictEqual(slot.textContent, "");
+    assert.ok(String(v.textContent).includes("30%"), v.textContent);
+    assert.ok(!/in use|burning/.test(v.textContent), v.textContent);
+    // The detail tooltip is the row text. The empty slot adds no words to it.
+    assert.strictEqual(v.title, v.textContent);
+    assert.ok(String(v.title).includes("30%"), v.title);
+    assert.ok(!/in use|burning/.test(v.title), v.title);
+    assert.ok(!("data-burn" in idle.attrs), "idle has data-burn");
+    for (const id of ["quiet", "gone"]) {
       const r = row(rail, id);
       assert.ok(r, id);
       assert.strictEqual(dotOf(r), undefined, `${id} drew a dot`);
+      assert.strictEqual(slotOf(r), undefined, `${id} reserved a slot`);
       assert.ok(!("data-burn" in r.attrs), `${id} has data-burn`);
     }
+    assert.match(CSS, /\.dot-none\{[^}]*visibility:\s*hidden/);
+    assert.ok(!/\.dot\.dot-none[^{]*\{[^}]*dot-breathe/.test(CSS), "the empty slot breathes");
   },
   async every_burning_row_gets_a_dot_not_only_the_next_host() {
     const seats = [

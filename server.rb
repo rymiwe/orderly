@@ -1896,15 +1896,16 @@ class OpsTabServer
   end
 
   # Which seat-usage history pools feed each rail seat's burn. A seat with a 5h
-  # window lists both; the higher level wins. Muse and Codex 5h have no history.
+  # window lists both; the higher level wins.
   QUOTA_HISTORY_POOLS = {
     "claude_weekly" => ["claude weekly all", "claude 5h"],
     "claude_fable" => ["claude weekly Fable"],
-    "codex" => ["chatgpt weekly"],
+    "codex" => ["chatgpt weekly", "chatgpt 5h"],
     "cursor_models" => ["cursor models"],
     "cursor_other" => ["cursor other models"],
     "grokbot" => ["grokbot week"],
-    "supergrok" => ["grok week"]
+    "supergrok" => ["grok week"],
+    "muse" => ["muse weekly", "muse 5h"]
   }.freeze
   # Rows built from seat rows (google_argon_week) name their pool in the id.
   GOOGLE_HISTORY_LABELS = { "argon" => "Argon", "gemini" => "Gemini", "claudegpt" => "Claude/GPT" }.freeze

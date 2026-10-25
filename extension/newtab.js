@@ -1150,6 +1150,9 @@
   // at least one pace over two hours is burn-strong. The server decides that
   // from seat-usage's history. The row only keeps a static outline. The level
   // is the dot beside the percentage, and only on a live seat that is burning.
+  // Every row that shows a percent reserves the dot's box. An inactive percent
+  // row leaves that box empty so the column lines up. A row with no percent
+  // does not reserve it.
   var BURN_TITLE = { soft: "burning in the last 30 min", strong: "burning above pace in the last 30 min" };
   function burnClass(seat, live) {
     return live && BURN_TITLE[seat.burn] ? " burn-" + seat.burn : "";
@@ -1192,6 +1195,17 @@
       title: dotTitle(seat, color, caps),
       "aria-hidden": "true"
     });
+  }
+  // Same box as the coloured dot, including its margin. Hidden, so it adds no
+  // words to the detail text or tooltip, and it does not animate.
+  function usageSlot() {
+    return el("span", { class: "dot dot-none", "aria-hidden": "true" });
+  }
+  function showsPercent(parts) {
+    if (!parts.length) return false;
+    var first = parts[0];
+    var text = typeof first === "string" ? first : (first && first.textContent) || "";
+    return String(text).indexOf("%") !== -1;
   }
 
   // One line per local tool with a working session: label and pool, no rates.
@@ -1331,10 +1345,12 @@
       caps = pct != null && elapsed != null ? capsLabel(pct, elapsed, Number(seat.window_s)) : null;
       // The caps warning goes right after the percentage, so a narrow row
       // cuts the reset day, not the warning. The dot sits in front of that
-      // percentage, on every live row the server marked soft or strong.
+      // percentage on every live row the server marked soft or strong. Any
+      // other row that shows a percent keeps an empty slot in that same place.
+      // Absent, unknown, and ended rows have no percent and no slot.
       if (caps) parts.splice(1, 0, el("span", { class: "caps", title: caps.title }, caps.text));
       detail = el("span", { class: "v" });
-      dot = burnActive(seat, live) ? usageDot(seat, pct, elapsed, caps) : null;
+      dot = burnActive(seat, live) ? usageDot(seat, pct, elapsed, caps) : (showsPercent(parts) ? usageSlot() : null);
       parts.forEach(function (p, i) {
         if (i === 0 && dot) detail.append(dot);
         if (i) detail.append(" · ");

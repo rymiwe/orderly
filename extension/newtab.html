@@ -152,8 +152,11 @@ button.chip:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .seat.burn-soft::after,.seat.burn-strong::after{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;border-radius:inherit;background:color-mix(in srgb,var(--warn) 7%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--warn) 40%,transparent)}
 /* Status dot beside the percentage. One 2s alternate on every active row.
    Green is --good, yellow --warn, red --crit. The margin keeps the 3px ring
-   inside .v, which clips overflow. */
-.seat .v .dot.dot-green,.seat .v .dot.dot-yellow,.seat .v .dot.dot-red{display:inline-block;width:6px;height:6px;border-radius:50%;vertical-align:middle;margin:4px 6px;animation:dot-breathe 2s ease-in-out infinite alternate}
+   inside .v, which clips overflow. Every percent row reserves that same box.
+   A row that is not burning leaves the box empty so the percents line up. */
+.seat .v .dot.dot-green,.seat .v .dot.dot-yellow,.seat .v .dot.dot-red,.seat .v .dot.dot-none{display:inline-block;width:6px;height:6px;border-radius:50%;vertical-align:middle;margin:4px 6px}
+.seat .v .dot.dot-green,.seat .v .dot.dot-yellow,.seat .v .dot.dot-red{animation:dot-breathe 2s ease-in-out infinite alternate}
+.seat .v .dot.dot-none{visibility:hidden}
 .seat .v .dot.dot-green{background:var(--good);--dot:var(--good)}
 .seat .v .dot.dot-yellow{background:var(--warn);--dot:var(--warn)}
 .seat .v .dot.dot-red{background:var(--crit);--dot:var(--crit)}

@@ -128,10 +128,40 @@ class QuotaTest < Minitest::Test
     assert_equal "strong", burn(weekly + five)
   end
 
-  def test_muse_and_non_live_seats_never_burn
+  def test_muse_does_not_burn_from_another_seats_pool
     rows = series("claude weekly all", 180, 0) { |ago| 100 - ago / 2.0 }
     assert_equal "none", burn(rows, "muse")
     assert_equal "none", burn(rows, "claude_weekly", status: "unknown")
+  end
+
+  # muse 5h / muse weekly and chatgpt 5h are the rows seat-usage appends.
+  def test_muse_and_codex_5h_go_soft_and_strong_from_their_history_rows
+    muse_soft = series("muse 5h", 180, 0, window: FIVE_H) { |ago| ago > 20 ? 10 : 12 }
+    assert_equal "soft", burn(muse_soft, "muse")
+    muse_strong = series("muse weekly", 180, 0) { |ago| ago >= 120 ? 10 : 10 + ((120 - ago) * 45 / 120.0) }
+    assert_equal "strong", burn(muse_strong, "muse")
+    weekly = series("chatgpt weekly", 180, 0) { 40 }
+    codex_soft = series("chatgpt 5h", 180, 0, window: FIVE_H) { |ago| ago > 20 ? 10 : 12 }
+    codex_strong = series("chatgpt 5h", 180, 0, window: FIVE_H) { |ago| ago >= 120 ? 10 : 10 + ((120 - ago) * 45 / 120.0) }
+    assert_equal "none", burn(weekly, "codex")
+    assert_equal "soft", burn(weekly + codex_soft, "codex")
+    assert_equal "strong", burn(weekly + codex_strong, "codex")
+  end
+
+  def test_fetch_quota_burns_muse_and_codex_from_those_history_rows
+    write_cache("as_of" => { "muse" => NOW, "chatgpt" => NOW },
+                "muse_week" => 35, "muse_5h" => 12,
+                "codex" => 40, "codex_5h" => 12, "codex_window_s" => WEEK)
+    rows = series("muse 5h", 180, 0, window: FIVE_H) { |ago| ago > 20 ? 10 : 12 }
+    rows += series("chatgpt 5h", 180, 0, window: FIVE_H) { |ago| ago >= 120 ? 10 : 10 + ((120 - ago) * 45 / 120.0) }
+    FileUtils.mkdir_p(File.dirname(SEAT_USAGE_HISTORY))
+    File.write(SEAT_USAGE_HISTORY, rows.map { |r| JSON.dump(r) }.join("\n") + "\n")
+    by_seat = seats.to_h { |s| [s["seat"], s["burn"]] }
+    assert_equal "soft", by_seat["muse"]
+    assert_equal "strong", by_seat["codex"]
+    assert_equal "live", seats.find { |s| s["seat"] == "muse" }["status"]
+  ensure
+    FileUtils.rm_f(SEAT_USAGE_HISTORY)
   end
 
   def test_google_rows_read_their_pool_from_the_seat_id
