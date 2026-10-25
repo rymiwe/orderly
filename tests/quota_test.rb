@@ -89,8 +89,68 @@ class QuotaTest < Minitest::Test
     srv.send(:quota_burn, history, { "seat" => seat, "status" => status }, NOW)
   end
 
+  def pph(rows, seat = "claude_weekly")
+    srv = OpsTabServer.allocate
+    history = rows.group_by { |r| r["pool"] }.transform_values { |l| l.sort_by { |r| r["read_ts"] } }
+    srv.send(:quota_burn_pph, history, { "seat" => seat, "status" => "live" }, NOW)
+  end
+
   def test_no_history_is_no_burn
     assert_equal "none", burn([])
+    assert_nil pph([])
+  end
+
+  def test_burn_pph_is_the_rise_over_the_last_30_minutes
+    # Base is the row at 30 minutes (4 points over half an hour = 8.0).
+    rows = [
+      hist("claude weekly all", 40, 10),
+      hist("claude weekly all", 30, 10),
+      hist("claude weekly all", 0, 14)
+    ]
+    assert_equal 8.0, pph(rows)
+  end
+
+  def test_burn_pph_ignores_the_previous_reset
+    old_reset = NOW - 1200
+    rows = [
+      hist("claude weekly all", 50, 90, reset: old_reset),
+      hist("claude weekly all", 40, 88, reset: old_reset),
+      hist("claude weekly all", 10, 2),
+      hist("claude weekly all", 0, 3)
+    ]
+    # No same-reset row at or before 30 minutes. One point in 10 minutes,
+    # divided by the full half hour, is 2.0 rather than a drop from 90.
+    assert_equal 2.0, pph(rows)
+    assert_equal "soft", burn(rows)
+  end
+
+  def test_burn_pph_is_nil_when_the_newest_reading_is_stale
+    rows = [hist("claude weekly all", 40, 10), hist("claude weekly all", 25, 20)]
+    assert_nil pph(rows)
+    assert_equal "none", burn(rows)
+  end
+
+  def test_a_short_history_does_not_overstate_burn_pph
+    # 10 points in 10 minutes would be 60/h if that span were trusted.
+    rows = [hist("claude weekly all", 10, 10), hist("claude weekly all", 0, 20)]
+    assert_equal 20.0, pph(rows)
+  end
+
+  def test_burn_pph_clamps_a_fall_at_zero
+    rows = [hist("claude weekly all", 30, 50), hist("claude weekly all", 0, 40)]
+    assert_equal 0.0, pph(rows)
+    assert_equal "none", burn(rows)
+  end
+
+  def test_burn_pph_rounds_to_one_decimal_and_takes_the_faster_pool
+    weekly = [hist("claude weekly all", 30, 10), hist("claude weekly all", 0, 12)]
+    five = [
+      hist("claude 5h", 30, 10, window: FIVE_H),
+      hist("claude 5h", 0, 14.14, window: FIVE_H)
+    ]
+    assert_equal 4.0, pph(weekly)
+    # 4.14 points in half an hour is 8.28, which rounds to 8.3, and wins.
+    assert_equal 8.3, pph(weekly + five)
   end
 
   def test_a_move_in_the_last_30_minutes_is_soft
@@ -157,8 +217,13 @@ class QuotaTest < Minitest::Test
     FileUtils.mkdir_p(File.dirname(SEAT_USAGE_HISTORY))
     File.write(SEAT_USAGE_HISTORY, rows.map { |r| JSON.dump(r) }.join("\n") + "\n")
     by_seat = seats.to_h { |s| [s["seat"], s["burn"]] }
+    by_pph = seats.to_h { |s| [s["seat"], s["burn_pph"]] }
     assert_equal "soft", by_seat["muse"]
     assert_equal "strong", by_seat["codex"]
+    # muse 5h: 10 → 12 over the last 30 minutes = 4.0. codex 5h rises faster.
+    assert_equal 4.0, by_pph["muse"]
+    assert_equal 22.5, by_pph["codex"]
+    assert_nil by_pph["claude_weekly"]
     assert_equal "live", seats.find { |s| s["seat"] == "muse" }["status"]
   ensure
     FileUtils.rm_f(SEAT_USAGE_HISTORY)

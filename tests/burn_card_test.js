@@ -33,7 +33,8 @@ class Node {
   all() { return [this].concat(...this.children.map((c) => (c.all ? c.all() : []))); }
 }
 
-function run(payload) {
+function run(payload, opts) {
+  opts = opts || {};
   const ids = {};
   const document = {
     visibilityState: "hidden", title: "",
@@ -43,7 +44,17 @@ function run(payload) {
     addEventListener() {}, querySelector: () => null, querySelectorAll: () => [],
     body: new Node("body"), documentElement: new Node("html")
   };
-  const ctx = { document, location: { search: "" }, URLSearchParams, console, Date, Math, JSON, setTimeout, clearTimeout,
+  let Clock = Date;
+  if (opts.now != null) {
+    const fixed = opts.now;
+    const RealDate = Date;
+    Clock = function (...args) { return args.length ? new RealDate(...args) : new RealDate(fixed); };
+    Clock.now = () => fixed;
+    Clock.parse = RealDate.parse;
+    Clock.UTC = RealDate.UTC;
+    Clock.prototype = RealDate.prototype;
+  }
+  const ctx = { document, location: { search: "" }, URLSearchParams, console, Date: Clock, Math, JSON, setTimeout, clearTimeout,
     setInterval: () => 0, clearInterval() {}, Promise, isNaN, Number, String, Array, Object,
     fetch: () => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(payload) }),
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} } };
@@ -171,38 +182,57 @@ const tests = {
       assert.ok(!rail.all().some((n) => n.className === "drivers"), "empty drivers drew a block");
     }
   },
-  async dot_colour_follows_pace_caps_and_burn() {
+  // Replaces dot_colour_follows_pace_caps_and_burn from the breathing-dot
+  // change. Pace, caps, and percent no longer choose the colour.
+  async dot_colour_follows_burn_rate() {
     const cases = [
-      { name: "ahead", seat: "a", pace: "ahead", burn: "soft", percent: 20, text: "20%", elapsed: 50, color: "red", title: "in use · ahead of pace" },
-      { name: "caps early", seat: "b", pace: "under", burn: "soft", percent: 70, text: "70%", elapsed: 40, color: "red", title: "in use · caps early" },
-      { name: "full", seat: "c", pace: "under", burn: "soft", percent: 100, text: "100%", elapsed: 50, color: "red", title: "in use · full" },
-      { name: "on pace", seat: "d", pace: "on", burn: "soft", percent: 40, text: "40%", elapsed: 50, color: "yellow", title: "in use · on pace" },
-      { name: "under strong", seat: "e", pace: "under", burn: "strong", percent: 20, text: "20%", elapsed: 50, color: "yellow", title: "in use · near pace" },
-      { name: "under soft", seat: "f", pace: "under", burn: "soft", percent: 20, text: "20%", elapsed: 50, color: "green", title: "in use · under pace" },
-      // Empty pace falls back to the meter's split. elapsed 5 skips caps
-      // (the projection is ignored in the first tenth of the window).
-      { name: "unknown pace over elapsed", seat: "g", pace: "", burn: "soft", percent: 8, text: "8%", elapsed: 5, color: "yellow", title: "in use · ahead of the window" },
-      { name: "unknown pace under elapsed", seat: "h", pace: "", burn: "soft", percent: 20, text: "20%", elapsed: 50, color: "green", title: "in use · under pace" },
-      { name: "unknown pace strong", seat: "i", pace: "", burn: "strong", percent: 20, text: "20%", elapsed: 50, color: "yellow", title: "in use · near pace" }
+      { name: "4.9", burn_pph: 4.9, pace: "ahead", percent: 70, elapsed: 40, color: "green", title: "in use · 4.9 pts/hr" },
+      { name: "5", burn_pph: 5, pace: "under", percent: 20, elapsed: 50, color: "yellow", title: "in use · 5.0 pts/hr" },
+      { name: "14.9", burn_pph: 14.9, pace: "under", percent: 20, elapsed: 50, color: "yellow", title: "in use · 14.9 pts/hr" },
+      { name: "15", burn_pph: 15, pace: "under", percent: 20, elapsed: 80, color: "red", title: "in use · 15.0 pts/hr" },
+      { name: "20", burn_pph: 20, pace: "on", percent: 40, elapsed: 50, color: "red", title: "in use · 20.0 pts/hr" },
+      { name: "missing", pace: "ahead", percent: 100, elapsed: 40, color: "green", title: "in use" }
     ];
-    const seats = cases.map((c) => painted({
-      seat: c.seat, label: c.name, pace: c.pace, burn: c.burn, percent: c.percent, text: c.text, elapsed: c.elapsed,
-      vendor: "claude", subscription: "claude"
-    }));
+    const seats = cases.map((c) => {
+      const o = {
+        seat: c.seat || c.name, label: c.name, pace: c.pace, burn: "soft", percent: c.percent, text: c.percent + "%",
+        elapsed: c.elapsed, vendor: "claude", subscription: "claude"
+      };
+      if ("burn_pph" in c) o.burn_pph = c.burn_pph;
+      return painted(o);
+    });
     const rail = await run(quota(seats, []));
     for (const c of cases) {
-      const r = row(rail, c.seat);
+      const id = c.seat || c.name;
+      const r = row(rail, id);
       const dot = dotOf(r);
       assert.ok(dot, `${c.name} has no dot`);
       assert.strictEqual(dot.attrs["data-dot"], c.color, c.name);
       assert.strictEqual(dot.className, "dot dot-" + c.color, c.name);
       assert.strictEqual(dot.attrs.title, c.title, c.name);
       assert.strictEqual(dot.attrs["aria-hidden"], "true", c.name);
-      assert.strictEqual(r.attrs["data-burn"], c.burn, c.name);
       const v = detail(r);
       assert.strictEqual(v.children[0], dot, `${c.name} dot is not beside the percentage`);
       assert.ok(String(v.children[1].textContent).includes("%"), `${c.name} percent missing`);
-      if (c.name === "caps early") assert.ok(/caps /.test(v.textContent), v.textContent);
+    }
+    // The early-cap warning still draws. It does not paint the dot.
+    const capped = detail(row(rail, "4.9"));
+    assert.ok(/caps /.test(capped.textContent), capped.textContent);
+    assert.strictEqual(dotOf(row(rail, "4.9")).attrs["data-dot"], "green");
+  },
+  async dot_phase_follows_the_wall_clock() {
+    const fixed = 1700000000123;
+    const seats = [
+      painted({ seat: "a", label: "A", burn: "soft", burn_pph: 2, percent: 20, text: "20%", elapsed: 50 }),
+      painted({ seat: "b", label: "B", burn: "strong", burn_pph: 20, percent: 30, text: "30%", elapsed: 50 })
+    ];
+    const rail = await run(quota(seats, []), { now: fixed });
+    const delay = "-" + (fixed % 4000) + "ms";
+    for (const id of ["a", "b"]) {
+      const dot = dotOf(row(rail, id));
+      assert.ok(dot, id);
+      assert.strictEqual(dot.style.animationDelay, delay, id);
+      assert.ok(dot.style.animationDelay.startsWith("-"), id);
     }
   },
   async inactive_percent_rows_reserve_an_empty_slot() {
@@ -261,8 +291,10 @@ const tests = {
     assert.ok(!/padding-left\s*:\s*5px/.test(CSS), "strong row still changes padding");
     const blocks = reducedMotionBlocks(CSS);
     assert.ok(blocks.length > 0, "no prefers-reduced-motion block");
-    assert.ok(blocks.some((b) => /\.dot[\s\S]*?\{[\s\S]*?animation\s*:\s*none/.test(b)),
-      "reduced motion does not set animation:none on the dot");
+    assert.ok(blocks.some((b) => /transition\s*:\s*none\s*!important/.test(b)), "global transition kill missing");
+    assert.ok(!blocks.some((b) => /\.dot[\s\S]*animation\s*:\s*none/.test(b)),
+      "reduced motion still disables the dot");
+    assert.match(HTML, /Deliberate exception \(Ryan 2026-10-25\)/);
     const animatedRows = [];
     walkRules(cssRules(CSS), (r) => {
       if (/animation\s*:/.test(r.body) && isSeatRowSelector(r.sel)) animatedRows.push(r.sel);
