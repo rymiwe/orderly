@@ -3,10 +3,13 @@
 
 require "cgi"
 require "date"
+require "digest"
 require "fileutils"
 require "json"
 require "net/http"
 require "open3"
+require "securerandom"
+require "shellwords"
 require "time"
 require "uri"
 require "webrick"
@@ -61,12 +64,48 @@ def profile_list(profile, key)
   value.is_a?(Array) ? value : []
 end
 
+# Lane lists are exact strings Ryan writes. A repo hash, a prefix, or
+# `github_org` is not a lane. Empty and non-strings are ignored.
+def lane_names(profile, key)
+  profile_list(profile, key).filter_map { |item|
+    next unless item.is_a?(String)
+
+    name = item.strip
+    name.empty? ? nil : name
+  }.freeze
+end
+
+def lane_roots(profile, key)
+  lane_names(profile, key).map { |path| File.expand_path(path) }.uniq.freeze
+end
+
 PROFILE = read_profile.freeze
+PERSONAL_REPOS = lane_names(PROFILE, "personal_repos")
+SOFWARE_REPOS = lane_names(PROFILE, "sofware_repos")
+PERSONAL_LINEAR_TEAMS = lane_names(PROFILE, "personal_linear_teams")
+SOFWARE_LINEAR_TEAMS = lane_names(PROFILE, "sofware_linear_teams")
+PERSONAL_WORKTREE_ROOTS = lane_roots(PROFILE, "personal_worktree_roots")
+SOFWARE_WORKTREE_ROOTS = lane_roots(PROFILE, "sofware_worktree_roots")
 
 BIND_HOST = "127.0.0.1"
 BIND_PORT = Integer(ENV.fetch("OPS_TAB_PORT", "5180"))
 ALLOWED_HOSTS = ["127.0.0.1", "localhost", "::1"].freeze
 CACHE_PATH = File.join(HOME, ".local/state/ops-tab/cache.json")
+# Staged packets and the append-only action audit. Not a queue a bot watches.
+STAGED_DIR = File.join(HOME, ".local/state/ops-tab/staged")
+AUDIT_PATH = File.join(HOME, ".local/state/ops-tab/actions-audit.jsonl")
+STAGE_BODY_MAX = 65_536
+# Personal clicks may stage only these. Anything else is refused.
+STAGE_ACTIONS = {
+  "agent:unconfirmed" => %w[resume loop],
+  "linear:mention" => %w[draft council],
+  "linear:comment" => %w[draft council],
+  "linear:waiting" => %w[draft council],
+  "pr:ci_fail" => %w[loop],
+  "pr:threads" => %w[draft],
+  "pr:changes_requested" => %w[loop council],
+  "pr:review_requested" => %w[council draft]
+}.freeze
 # The SuperGrok probe runs here so its sessions never look like agent work.
 GROK_PROBE_DIR = File.join(HOME, ".local/state/ops-tab/grok-probe")
 GROK_IGNORED_CWDS = [GROK_PROBE_DIR, "/tmp"].freeze
@@ -1155,6 +1194,8 @@ class OpsTabServer
       "machines" => empty_source
     }
     load_cache
+    # Per-boot capability for POST /actions/stage. Not a vendor credential.
+    @action_token = SecureRandom.hex(16)
     @linear_key = read_linear_key
     if @linear_key.nil?
       # Documented behaviour: no key means the Linear card serves nothing, not
@@ -1170,6 +1211,7 @@ class OpsTabServer
     )
     @http.mount_proc("/cards") { |req, res| handle_cards(req, res) }
     @http.mount_proc("/health") { |req, res| handle_health(req, res) }
+    @http.mount_proc("/actions/stage") { |req, res| handle_stage(req, res) }
     trap("INT") { @http.shutdown }
     trap("TERM") { @http.shutdown }
   end
@@ -2715,6 +2757,9 @@ class OpsTabServer
     row = {
       "number" => hit["number"],
       "repo" => repo,
+      # Cached on the search hit. Lane matching uses it when it is present and
+      # does not call gh to fill it in.
+      "name_with_owner" => hit.dig("repository", "nameWithOwner").to_s,
       "title" => (gql && gql["title"]) || hit["title"],
       "url" => (gql && gql["url"]) || hit["url"],
       "draft" => draft,
@@ -2992,6 +3037,7 @@ class OpsTabServer
     rows.reject! { |r| pr_needs_you_expired?(r) }
     rows.sort_by! { |r| r["since"] || "9999" }
     rows.concat(needs_you_from_quota(quota))
+    attach_last_actions!(rows)
     rows
   end
 
@@ -3009,7 +3055,7 @@ class OpsTabServer
 
       label = machine["label"].to_s
       if machine["link"] == "disconnected"
-        {
+        annotate_inert_row({
           "kind" => "machine",
           "id" => label,
           "title" => "#{label} bot link disconnected",
@@ -3017,9 +3063,9 @@ class OpsTabServer
           "since" => machine["link_as_of"],
           "action" => "Grok Bot",
           "worktree" => nil
-        }
+        }, subkind: "link", source: label)
       elsif machine["link"] == "unknown" && machine["heartbeat"] == "dead"
-        {
+        annotate_inert_row({
           "kind" => "machine",
           "id" => label,
           "title" => "#{label} heartbeat stale, bot link unknown",
@@ -3027,7 +3073,7 @@ class OpsTabServer
           "since" => machine["heartbeat_last"],
           "action" => "Grok Bot",
           "worktree" => nil
-        }
+        }, subkind: "link", source: label)
       end
     end
   end
@@ -3039,7 +3085,7 @@ class OpsTabServer
         next unless grok_unconfirmed_needs_you?(s)
 
         wt = s["worktree"] || File.basename(s["cwd"].to_s)
-        rows << {
+        rows << annotate_work_row({
           "kind" => "agent",
           "id" => "grok",
           "title" => "Process in #{wt} exited without a completed turn_ended",
@@ -3047,10 +3093,10 @@ class OpsTabServer
           "since" => s["updated_at"],
           "action" => "grok -c",
           "worktree" => s["worktree"]
-        }
+        }, subkind: "unconfirmed", source: agent_source(s), lane: path_lane(s["cwd"]), path: s["cwd"])
       elsif s["tool"] == "claude" && s["state"] == "waiting"
         wt = s["worktree"] || File.basename(s["cwd"].to_s)
-        rows << {
+        rows << annotate_work_row({
           "kind" => "agent",
           "id" => "claude",
           "title" => "#{wt} is waiting on a permission prompt",
@@ -3058,7 +3104,7 @@ class OpsTabServer
           "since" => s["updated_at"],
           "action" => "focus",
           "worktree" => s["worktree"]
-        }
+        }, subkind: "waiting", source: agent_source(s), lane: path_lane(s["cwd"]), path: s["cwd"])
       end
     end
     rows
@@ -3076,7 +3122,8 @@ class OpsTabServer
       mention_ids[ident] = true
       actor = mention["actor"].to_s
       verb = mention["kind"] == "mention" ? "mentioned you in" : "commented on"
-      rows << {
+      subkind = mention["kind"] == "mention" ? "mention" : "comment"
+      rows << annotate_work_row({
         "kind" => "linear",
         "id" => ident,
         "title" => "#{actor} #{verb} #{ident}",
@@ -3084,8 +3131,9 @@ class OpsTabServer
         "since" => mention["at"],
         "action" => "reply",
         "action_url" => mention["comment_url"],
-        "worktree" => matching_worktree_names(ident, wt_rows).first
-      }
+        "worktree" => matching_worktree_names(ident, wt_rows).first,
+        "item_title" => mention["title"]
+      }, subkind: subkind, source: linear_source(nil, ident), lane: linear_lane(nil, ident), url: mention["url"] || mention["comment_url"])
     end
     (linear["mine"] || []).each do |issue|
       next if mention_ids[issue["id"].to_s]
@@ -3094,16 +3142,18 @@ class OpsTabServer
       next if issue["last_comment_by"].to_s.empty?
 
       excerpt = issue["last_comment_excerpt"].to_s
-      rows << {
+      ident = issue["id"].to_s
+      rows << annotate_work_row({
         "kind" => "linear",
-        "id" => issue["id"],
+        "id" => ident,
         "title" => "#{issue["last_comment_by"]} asked a question in #{issue["state"]}",
         "detail" => "\"#{excerpt}\"",
         "since" => issue["last_comment_at"],
         "action" => "reply",
         "action_url" => issue["url"],
-        "worktree" => (issue["worktrees"] || []).first
-      }
+        "worktree" => (issue["worktrees"] || []).first,
+        "item_title" => issue["title"]
+      }, subkind: "waiting", source: linear_source(issue["team"], ident), lane: linear_lane(issue["team"], ident), url: issue["url"])
     end
     rows
   end
@@ -3151,7 +3201,7 @@ class OpsTabServer
       # the weekly pool at 100 percent. The Bot's is hasAvailableUsage false.
       if seat["exhausted"]
         detail = seat["text"].to_s.sub(/\Aexhausted\s*(·\s*)?/, "")
-        rows << {
+        rows << annotate_inert_row({
           "kind" => "quota",
           "id" => id,
           "title" => "#{id} exhausted",
@@ -3159,7 +3209,7 @@ class OpsTabServer
           "since" => seat["verified_at"],
           "action" => spec["action"] || "/usage",
           "worktree" => nil
-        }
+        }, subkind: "usage", source: id)
         next
       end
 
@@ -3167,7 +3217,7 @@ class OpsTabServer
       next unless pct.is_a?(Numeric) && pct >= QUOTA_NEEDS_YOU_AT
 
       n = pct.round
-      rows << {
+      rows << annotate_inert_row({
         "kind" => "quota",
         "id" => id,
         "title" => "#{seat["label"]} at #{n}%",
@@ -3175,7 +3225,7 @@ class OpsTabServer
         "since" => seat["verified_at"],
         "action" => spec["action"] || "/usage",
         "worktree" => nil
-      }
+      }, subkind: "usage", source: id)
     end
     rows
   end
@@ -3189,21 +3239,30 @@ class OpsTabServer
     rows
   end
 
-  def worktree_for_pr(pr, wt_rows)
+  def worktree_hit_for_pr(pr, wt_rows)
     num = pr["number"].to_i
     repo = pr["repo"]
     hit = wt_rows.find { |r| r.dig("pr", "number").to_i == num && r["repo"] == repo }
     hit ||= wt_rows.find { |r| r.dig("pr", "number").to_i == num }
+    hit
+  end
+
+  def worktree_for_pr(pr, wt_rows)
+    hit = worktree_hit_for_pr(pr, wt_rows)
     hit && hit["name"]
   end
 
   def needs_you_mine(pr, wt_rows)
     rows = []
-    wt = worktree_for_pr(pr, wt_rows)
+    hit = worktree_hit_for_pr(pr, wt_rows)
+    wt = hit && hit["name"]
+    path = hit && hit["path"]
     id = "##{pr["number"]}"
+    lane = repo_lane(pr["repo"], pr["name_with_owner"])
+    source = repo_source(pr["repo"], pr["name_with_owner"])
     if pr["ci"] == "fail"
       detail = [pr["ci_failed_name"], pr["title"]].compact.reject { |s| s.to_s.empty? }.join(" · ")
-      rows << {
+      rows << annotate_work_row({
         "kind" => "pr",
         "id" => id,
         "title" => "CI failed on the last push",
@@ -3211,14 +3270,15 @@ class OpsTabServer
         "since" => pr["ci_failed_at"] || pr["since"],
         "action" => "logs",
         "action_url" => pr["ci_url"],
-        "worktree" => wt
-      }
+        "worktree" => wt,
+        "item_title" => pr["title"]
+      }, subkind: "ci_fail", source: source, lane: lane, url: pr["url"], path: path)
     end
     awaiting = pr["threads_awaiting_me"].to_i
     if awaiting.positive?
       who = pr["threads_last_by"] || "reviewer"
       noun = awaiting == 1 ? "thread" : "threads"
-      rows << {
+      rows << annotate_work_row({
         "kind" => "pr",
         "id" => id,
         "title" => "#{awaiting} review #{noun} from #{who} with no reply",
@@ -3226,12 +3286,13 @@ class OpsTabServer
         "since" => pr["thread_comment_at"] || pr["since"],
         "action" => "reply",
         "action_url" => pr["thread_comment_url"],
-        "worktree" => wt
-      }
+        "worktree" => wt,
+        "item_title" => pr["title"]
+      }, subkind: "threads", source: source, lane: lane, url: pr["url"], path: path)
     end
     if pr["review_decision"] == "CHANGES_REQUESTED"
       who = pr["changes_requested_by"] || "reviewer"
-      rows << {
+      rows << annotate_work_row({
         "kind" => "pr",
         "id" => id,
         "title" => "#{who} requested changes",
@@ -3239,8 +3300,9 @@ class OpsTabServer
         "since" => pr["changes_requested_at"] || pr["since"],
         "action" => "open",
         "action_url" => pr["url"],
-        "worktree" => wt
-      }
+        "worktree" => wt,
+        "item_title" => pr["title"]
+      }, subkind: "changes_requested", source: source, lane: lane, url: pr["url"], path: path)
     end
     rows
   end
@@ -3252,7 +3314,8 @@ class OpsTabServer
     return [] if t.nil? || t.to_s.empty?
     return [] unless Time.parse(t.to_s) <= (utc_now - REVIEW_REQUEST_GRACE)
 
-    [{
+    hit = worktree_hit_for_pr(pr, wt_rows)
+    [annotate_work_row({
       "kind" => "pr",
       "id" => "##{pr["number"]}",
       "title" => "#{pr["requested_by"] || pr["author"] || "someone"} asked for your review",
@@ -3261,8 +3324,10 @@ class OpsTabServer
       "expires_from" => pr["updated_at"] || pr["since"] || t,
       "action" => "review",
       "action_url" => pr["url"],
-      "worktree" => worktree_for_pr(pr, wt_rows)
-    }]
+      "worktree" => hit && hit["name"],
+      "item_title" => pr["title"]
+    }, subkind: "review_requested", source: repo_source(pr["repo"], pr["name_with_owner"]),
+       lane: repo_lane(pr["repo"], pr["name_with_owner"]), url: pr["url"], path: hit && hit["path"])]
   rescue ArgumentError
     []
   end
@@ -3413,6 +3478,464 @@ class OpsTabServer
     }
   end
 
+  # --- needs-you lanes and staged packets ---------------------------------
+  # Lane is an allowlist hit. profile.repos, github_org, and a worktree name
+  # do not decide it. Unmatched, empty, or listed on both sides is unknown.
+  # POST /actions/stage writes a packet from the row already in memory. It
+  # does not refresh gh, op, Linear, or a model. GET never writes.
+
+  def action_token
+    @action_token ||= SecureRandom.hex(16)
+  end
+
+  def repo_lane(name, name_with_owner)
+    list_lane([name, name_with_owner], PERSONAL_REPOS, SOFWARE_REPOS)
+  end
+
+  def repo_source(name, name_with_owner)
+    nwo = name_with_owner.to_s.strip
+    return nwo unless nwo.empty?
+
+    bare = name.to_s.strip
+    bare.empty? ? "unknown" : bare
+  end
+
+  def linear_source(team, ident)
+    key = team.to_s.strip
+    return key unless key.empty?
+
+    from_id = team_from_ident(ident)
+    from_id.nil? ? "unknown" : from_id
+  end
+
+  def linear_lane(team, ident)
+    explicit = team.to_s.strip
+    from_id = team_from_ident(ident).to_s
+    keys = [explicit, from_id].reject(&:empty?).uniq
+    return "unknown" if keys.empty?
+
+    lanes = keys.map { |key| list_lane([key], PERSONAL_LINEAR_TEAMS, SOFWARE_LINEAR_TEAMS) }.uniq
+    lanes.size == 1 ? lanes.first : "unknown"
+  end
+
+  def team_from_ident(ident)
+    ident.to_s.match(/\A([A-Za-z][A-Za-z0-9]*)-\d+\z/)&.[](1)
+  end
+
+  def path_lane(path)
+    expanded = expand_lane_path(path)
+    return "unknown" if expanded.nil?
+
+    list_lane_paths(expanded, PERSONAL_WORKTREE_ROOTS, SOFWARE_WORKTREE_ROOTS)
+  end
+
+  def agent_source(session)
+    name = session["worktree"].to_s.strip
+    return name unless name.empty?
+
+    base = File.basename(session["cwd"].to_s)
+    base.empty? || base == "/" ? "unknown" : base
+  end
+
+  def list_lane(candidates, personal, sofware)
+    names = candidates.map { |item| item.to_s.strip }.reject(&:empty?).uniq
+    return "unknown" if names.empty?
+
+    on_personal = names.any? { |name| personal.include?(name) }
+    on_sofware = names.any? { |name| sofware.include?(name) }
+    return "personal" if on_personal && !on_sofware
+    return "sofware" if on_sofware && !on_personal
+
+    "unknown"
+  end
+
+  def list_lane_paths(path, personal, sofware)
+    on_personal = under_lane_root?(path, personal)
+    on_sofware = under_lane_root?(path, sofware)
+    return "personal" if on_personal && !on_sofware
+    return "sofware" if on_sofware && !on_personal
+
+    "unknown"
+  end
+
+  def under_lane_root?(path, roots)
+    roots.any? { |root| path == root || path.start_with?("#{root}/") }
+  end
+
+  def expand_lane_path(path)
+    text = path.to_s.strip
+    return nil if text.empty? || !text.start_with?("/")
+
+    File.expand_path(text)
+  rescue ArgumentError
+    nil
+  end
+
+  def work_row_key(kind, source, id, subkind)
+    [kind, source.to_s.empty? ? "unknown" : source, id, subkind].join(":")
+  end
+
+  def annotate_inert_row(row, subkind:, source:)
+    row["subkind"] = subkind
+    row["row_key"] = work_row_key(row["kind"], source, row["id"], subkind)
+    row["actions"] = []
+    row
+  end
+
+  def annotate_work_row(row, subkind:, source:, lane:, url: nil, path: nil)
+    row["subkind"] = subkind
+    row["repo"] = source
+    row["url"] = url if url
+    # A full path is a personal packet field. SOFware and unknown rows do not
+    # carry one, so a handoff cannot copy a BLD path.
+    row["path"] = lane == "personal" ? path : nil
+    row["lane"] = lane
+    row["row_key"] = work_row_key(row["kind"], source, row["id"], subkind)
+    row["actions"] = personal_stage_actions(row)
+    wes = wes_handoff(row)
+    row["wes"] = wes if wes
+    row
+  end
+
+  def personal_stage_actions(row)
+    return [] unless row["lane"] == "personal"
+
+    ids = STAGE_ACTIONS["#{row["kind"]}:#{row["subkind"]}"] || []
+    located = !row["path"].to_s.empty? || !row["worktree"].to_s.empty?
+    ids = ids.reject { |id| (id == "resume" || (id == "loop" && row["kind"] == "agent")) && !located }
+    ids.map { |id| { "id" => id, "label" => id } }
+  end
+
+  def wes_handoff(row)
+    return nil unless row["lane"] == "sofware"
+
+    link = row["url"].to_s
+    link = row["action_url"].to_s if link.empty?
+    ident = [row["repo"], row["id"]].map { |part| part.to_s.strip }.reject(&:empty?).join(" ")
+    text = "[SOFware handoff] #{ident} #{row["title"]} #{link} — reason: #{row["subkind"]}"
+    { "id" => "wes", "label" => "wes", "copy_text" => text.gsub(/\s+/, " ").strip }
+  end
+
+  def attach_last_actions!(rows)
+    audits = audit_entries
+    rows.each do |row|
+      last = last_action_for(row, audits)
+      row["last_action"] = last if last
+    end
+  end
+
+  # The status file is one record per row key. A newer failure overwrites it.
+  # A record whose `since` is not the row's current `since` is a previous
+  # occurrence and is not shown. Audit lines are the same: only the latest
+  # line for this row key and this `since` can surface, and a matching failure
+  # status wins over an older refusal.
+  def last_action_for(row, audits)
+    key = row["row_key"].to_s
+    return nil if key.empty?
+
+    since = row["since"].to_s
+    status = read_status(key)
+    if status && status["row_key"] == key && status["since"].to_s == since && status["status"] == "failed"
+      return {
+        "action" => status["action"].to_s,
+        "status" => "failed",
+        "code" => status["code"],
+        "error" => status["error"],
+        "ts" => status["ts"],
+        "since" => since
+      }
+    end
+
+    hit = audits.reverse.find { |entry| entry["row_key"] == key && entry["since"].to_s == since }
+    return nil if hit.nil? || hit["status"] == "staged" || hit["status"].to_s.empty?
+
+    {
+      "action" => hit["action"],
+      "status" => hit["status"],
+      "error" => hit["error"],
+      "ts" => hit["ts"],
+      "since" => since
+    }
+  end
+
+  def read_status(row_key)
+    path = status_path_for(row_key)
+    return nil unless File.file?(path)
+
+    parsed = JSON.parse(File.read(path))
+    parsed.is_a?(Hash) ? parsed : nil
+  rescue JSON::ParserError
+    nil
+  end
+
+  def audit_entries
+    return [] unless File.file?(AUDIT_PATH)
+
+    File.readlines(AUDIT_PATH, chomp: true).filter_map { |line|
+      next if line.strip.empty?
+
+      begin
+        parsed = JSON.parse(line)
+        parsed.is_a?(Hash) ? parsed : nil
+      rescue JSON::ParserError
+        nil
+      end
+    }
+  end
+
+  def stage_slug(row_key)
+    Digest::SHA256.hexdigest(row_key.to_s)
+  end
+
+  def status_path_for(row_key)
+    File.join(STAGED_DIR, "#{stage_slug(row_key)}.status.json")
+  end
+
+  def cached_needs_rows_unlocked
+    local = source("local")
+    wt = compose_worktree_rows(local["data"], source_data("pings"))
+    sessions = local_sessions(local["data"])
+    linear = compose_linear(source_data("linear"), wt)
+    build_needs_you(sessions, source_data("prs"), linear, source_data("quota"), wt, source_data("machines"))
+  end
+
+  def handle_stage(req, res)
+    return unless allow_host!(req, res)
+
+    method = req.request_method.to_s.upcase
+    if method == "OPTIONS"
+      handle_stage_options(req, res)
+      return
+    end
+    unless method == "POST"
+      # GET and every other method write nothing: no packet, no audit line.
+      res.status = 405
+      res["Allow"] = "POST, OPTIONS"
+      res["Content-Type"] = "application/json"
+      res.body = JSON.generate({ "ok" => false, "error" => "method not allowed" })
+      return
+    end
+
+    origin = req["Origin"]
+    unless post_origin_allowed?(origin)
+      json_error(res, 403, "forbidden origin")
+      return
+    end
+    res["Access-Control-Allow-Origin"] = origin
+    res["Vary"] = "Origin"
+
+    unless json_content_type?(req["Content-Type"])
+      json_error(res, 415, "content type")
+      return
+    end
+    unless token_match?(req["X-Orderly-Token"], action_token)
+      json_error(res, 403, "forbidden token")
+      return
+    end
+
+    raw = req.body.to_s
+    if raw.bytesize > STAGE_BODY_MAX
+      json_error(res, 413, "body too large")
+      return
+    end
+    begin
+      parsed = JSON.parse(raw)
+    rescue JSON::ParserError
+      json_error(res, 400, "invalid json")
+      return
+    end
+    unless parsed.is_a?(Hash) && parsed["row_key"].is_a?(String) && !parsed["row_key"].empty? &&
+        parsed["action"].is_a?(String) && !parsed["action"].empty?
+      json_error(res, 400, "invalid body")
+      return
+    end
+
+    result = nil
+    @mutex.synchronize do
+      result = stage_from_cache(parsed["row_key"], parsed["action"])
+    end
+    res.status = result[:status]
+    res["Content-Type"] = "application/json"
+    res.body = JSON.generate(result[:body])
+  end
+
+  def handle_stage_options(req, res)
+    origin = req["Origin"]
+    unless post_origin_allowed?(origin)
+      json_error(res, 403, "forbidden origin")
+      return
+    end
+    res.status = 204
+    res["Access-Control-Allow-Origin"] = origin
+    res["Access-Control-Allow-Methods"] = "POST"
+    res["Access-Control-Allow-Headers"] = "Content-Type, X-Orderly-Token"
+    res["Access-Control-Max-Age"] = "600"
+    res["Vary"] = "Origin"
+    res.body = ""
+  end
+
+  # Extension origin only. A missing Origin, Origin: null, and a page origin
+  # stay rejected when OPS_TAB_DEV=1. Dev mode still relaxes GET /cards.
+  def post_origin_allowed?(origin)
+    return false if origin.nil? || origin.empty? || origin == "null"
+
+    id = ENV["OPS_TAB_EXTENSION_ID"].to_s.strip
+    return false if id.empty?
+
+    origin == "chrome-extension://#{id}"
+  end
+
+  def json_content_type?(value)
+    value.to_s.split(";", 2).first.to_s.strip.downcase == "application/json"
+  end
+
+  def token_match?(given, expected)
+    left = given.to_s
+    right = expected.to_s
+    return false if left.empty? || left.bytesize != right.bytesize
+
+    diff = 0
+    left.bytesize.times { |i| diff |= (left.getbyte(i) ^ right.getbyte(i)) }
+    diff.zero?
+  end
+
+  def json_error(res, status, error)
+    res.status = status
+    res["Content-Type"] = "application/json"
+    res.body = JSON.generate({ "ok" => false, "error" => error })
+  end
+
+  def stage_from_cache(row_key, action)
+    row = cached_needs_rows_unlocked.find { |item| item["row_key"] == row_key }
+    if row.nil?
+      append_audit(audit_fields(nil, row_key, action, "refused_unknown", error: "unknown row"))
+      return { status: 404, body: { "ok" => false, "error" => "unknown row" } }
+    end
+
+    lane = row["lane"].to_s
+    unless lane == "personal"
+      refused = lane.empty? ? "unknown" : lane
+      append_audit(audit_fields(row, row_key, action, "refused_lane", error: "lane #{refused}"))
+      return { status: 422, body: { "ok" => false, "error" => "lane #{refused}" } }
+    end
+
+    allowed = (row["actions"] || []).map { |item| item["id"] }
+    unless allowed.include?(action)
+      append_audit(audit_fields(row, row_key, action, "refused_action", error: "action not allowed"))
+      return { status: 422, body: { "ok" => false, "error" => "action not allowed" } }
+    end
+
+    md_path, run_cmd = write_stage_packet(row, action)
+    append_audit(audit_fields(row, row_key, action, "staged", staged_path: md_path))
+    { status: 200, body: { "ok" => true, "staged_path" => md_path, "run_cmd" => run_cmd } }
+  end
+
+  def audit_fields(row, row_key, action, status, staged_path: nil, error: nil)
+    {
+      "ts" => iso(utc_now),
+      "row_key" => row_key,
+      "kind" => row && row["kind"],
+      "id" => row && row["id"],
+      "repo" => row && row["repo"],
+      "lane" => row && row["lane"],
+      "action" => action,
+      "status" => status,
+      "since" => row && row["since"],
+      "staged_path" => staged_path,
+      "error" => error
+    }
+  end
+
+  def append_audit(fields)
+    FileUtils.mkdir_p(File.dirname(AUDIT_PATH))
+    File.open(AUDIT_PATH, "a") { |file| file.write(JSON.generate(fields) + "\n") }
+  end
+
+  def write_stage_packet(row, action)
+    FileUtils.mkdir_p(STAGED_DIR)
+    slug = stage_slug(row["row_key"])
+    json_path = File.join(STAGED_DIR, "#{slug}.json")
+    md_path = File.join(STAGED_DIR, "#{slug}.md")
+    packet = {
+      "row_key" => row["row_key"],
+      "action" => action,
+      "lane" => row["lane"],
+      "kind" => row["kind"],
+      "subkind" => row["subkind"],
+      "id" => row["id"],
+      "repo" => row["repo"],
+      "title" => row["item_title"].to_s.empty? ? row["title"] : row["item_title"],
+      "headline" => row["title"],
+      "detail" => row["detail"],
+      "url" => row["url"],
+      "action_url" => row["action_url"],
+      "worktree" => row["worktree"],
+      "path" => row["path"],
+      "since" => row["since"],
+      "staged_at" => iso(utc_now)
+    }
+    atomic_write(json_path, JSON.generate(packet) + "\n")
+    atomic_write(md_path, packet_markdown(packet))
+    # A new stage drops the previous failure so the pill does not linger.
+    FileUtils.rm_f(status_path_for(row["row_key"]))
+    [md_path, stage_run_command(md_path, row, action)]
+  end
+
+  def packet_markdown(packet)
+    lines = [
+      "# #{packet["action"]}",
+      "",
+      "Local brief from cached Needs-you data. Nothing is posted, sent, or merged.",
+      "The click that staged this file did not start a model turn.",
+      "",
+      "- row_key: #{packet["row_key"]}",
+      "- lane: #{packet["lane"]}",
+      "- kind: #{packet["kind"]}",
+      "- subkind: #{packet["subkind"]}",
+      "- id: #{packet["id"]}",
+      "- repo: #{packet["repo"]}",
+      "- title: #{packet["title"]}",
+      "- headline: #{packet["headline"]}",
+      "- url: #{packet["url"]}",
+      "- action_url: #{packet["action_url"]}",
+      "- worktree: #{packet["worktree"]}",
+      "- path: #{packet["path"]}",
+      "- since: #{packet["since"]}",
+      "- staged_at: #{packet["staged_at"]}",
+      "",
+      packet["detail"].to_s,
+      ""
+    ]
+    if packet["action"] == "draft"
+      lines << "## Reply"
+      lines << ""
+      lines << "Write the reply here. This file is not posted."
+      lines << ""
+    end
+    lines.join("\n")
+  end
+
+  # `cat` prints the brief. A non-zero exit of that command writes one status
+  # file (overwrite). Ryan runs this himself; the page only copies it.
+  def stage_run_command(md_path, row, action)
+    script = 'File.write(ARGV[0], JSON.generate({"status"=>"failed","code"=>Integer(ARGV[1]),"row_key"=>ARGV[2],"since"=>ARGV[3],"action"=>ARGV[4],"ts"=>Time.now.utc.strftime("%Y-%m-%dT%H:%M:%SZ")}) + "\n")'
+    writer = [
+      "ruby", "-rjson", "-e", Shellwords.escape(script),
+      Shellwords.escape(status_path_for(row["row_key"])), '"$ec"',
+      Shellwords.escape(row["row_key"].to_s),
+      Shellwords.escape(row["since"].to_s),
+      Shellwords.escape(action.to_s)
+    ].join(" ")
+    "cat -- #{Shellwords.escape(md_path)} ; ec=$?; if [ \"$ec\" -ne 0 ]; then #{writer}; exit \"$ec\"; fi"
+  end
+
+  def atomic_write(path, text)
+    FileUtils.mkdir_p(File.dirname(path))
+    tmp = "#{path}.tmp-#{Process.pid}-#{Thread.current.object_id}"
+    File.write(tmp, text)
+    File.rename(tmp, path)
+  end
+
   def handle_health(req, res)
     return unless allow_origin!(req, res)
 
@@ -3425,7 +3948,12 @@ class OpsTabServer
     return unless allow_origin!(req, res)
 
     payload = @mutex.synchronize do
-      { "server_time" => iso(utc_now), "profile" => PROFILE_VIEW, "cards" => compose_cards }
+      {
+        "server_time" => iso(utc_now),
+        "profile" => PROFILE_VIEW,
+        "action_token" => action_token,
+        "cards" => compose_cards
+      }
     end
     res.status = 200
     res["Content-Type"] = "application/json"

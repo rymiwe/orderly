@@ -19,7 +19,7 @@ Loaded from the process environment, then (without overriding) from `~/.config/o
 | Variable | Meaning |
 |---|---|
 | `OPS_TAB_EXTENSION_ID` | Chrome extension id. Requests with `Origin: chrome-extension://<id>` get `Access-Control-Allow-Origin`. |
-| `OPS_TAB_DEV` | Set to `1` to also allow `Origin: null` (file://) and `http://127.0.0.1:*`. |
+| `OPS_TAB_DEV` | Set to `1` to also allow `Origin: null` (file://) and `http://127.0.0.1:*` on `GET /cards` and `GET /health`. `POST /actions/stage` still rejects a missing Origin and `Origin: null`. |
 | `OPS_TAB_PORT` | Listen port. Default `5180`. |
 
 Workplace and machine facts are `~/.config/ops-tab/profile.json`, kept in dotfiles, not in this repo. A missing file leaves the repo list, the brand, and the Linear key reference empty. The page reads `profile` on `/cards` for the brand, the name beside it, and the search placeholder.
@@ -37,13 +37,21 @@ Workplace and machine facts are `~/.config/ops-tab/profile.json`, kept in dotfil
   "fleet_expected": [{ "id": "laptop", "label": "Laptop" }],
   "repos": [
     { "name": "app", "root": "~/code/app", "db_port": 5432, "pings": ["/login", "/health"] }
-  ]
+  ],
+  "personal_repos": [],
+  "sofware_repos": [],
+  "personal_linear_teams": [],
+  "sofware_linear_teams": [],
+  "personal_worktree_roots": [],
+  "sofware_worktree_roots": []
 }
 ```
 
 `repos[].root` may start with `~`. `pings` defaults to `/login` when omitted. `fleet_expected` hosts are the ones treated as always on. `waiting_states` are the Linear state names that count as waiting, matched case-insensitively.
 
-Requests with no `Origin` header (curl) are allowed. Any other origin gets `403` and no CORS headers.
+Lane lists are exact strings. `personal_repos` and `sofware_repos` match a PR's `owner/repo` or its bare repo name, whichever is written. Linear lists match a team key (`RYA`) or the team prefix of an identifier (`RYA-123`). Worktree lists are absolute directory prefixes for agent sessions. A row that matches neither list, or both, is `unknown`. `repos` and `github_org` are not lanes.
+
+Requests with no `Origin` header (curl) are allowed on `GET /cards` and `GET /health`. Any other origin gets `403` and no CORS headers. `POST /actions/stage` does not allow a missing Origin; see Needs-you actions below.
 
 Every request also has its `Host` header checked. Only `127.0.0.1`, `localhost` and `::1` pass, with no port or the listen port. Anything else gets `403` and `{"error":"forbidden host"}`. This is what stops a DNS-rebinding page reaching the server, because such a page sends no `Origin`.
 
@@ -73,6 +81,16 @@ The server stores what each source last returned, never anything derived from an
 Each source keeps its last good data in memory and in `~/.local/state/ops-tab/cache.json`. A failed refresh keeps that data and its old `fetched_at`, and sets the card's `error`. Before the first success, `data` is `null` and `error` is `"no data yet"`. `/cards` never waits on a refresh.
 
 `needs_you` is a projection of the local, `prs`, `linear`, `quota` and `machines` sources. Its `fetched_at` is the oldest of them and its `error` is theirs, so it never reads as current while the rows behind it are stale.
+
+## Needs-you actions
+
+`GET /cards` includes `action_token`, a per-boot hex string. It is a local request capability for the extension, not a vendor key. Personal rows also carry `lane`, `row_key`, and `actions` (`council`, `loop`, `draft`, `resume` — only the ones that fit that kind). SOFware rows carry a `wes` handoff string and no BLD command. Unknown rows carry `lane: "unknown"`. Quota and machine rows gain no actions.
+
+`POST /actions/stage` with `{"row_key","action"}` writes `~/.local/state/ops-tab/staged/<slug>.json` and `.md` from the cached row only. It does not call `gh`, `op`, Linear, or a model. The response is `{ok, staged_path, run_cmd}`. The page copies `run_cmd` and does not run it. The command prints the brief; a non-zero exit overwrites `<slug>.status.json`. The next `GET /cards` shows that as a failure pill when the status `since` is still the row's `since`. A newer failure replaces the file. A row whose `since` changed does not keep the old pill. Staging again deletes the status file.
+
+The route requires `Host` pinning, `Content-Type: application/json`, `Origin: chrome-extension://<OPS_TAB_EXTENSION_ID>`, and `X-Orderly-Token`. A missing Origin, `Origin: null`, and any other Origin are rejected even when `OPS_TAB_DEV=1`. `GET /actions/stage` returns 405 and writes nothing. A SOFware or unknown row returns 422, writes no packet, and appends a refusal to `~/.local/state/ops-tab/actions-audit.jsonl`. That log is append-only and also records staged requests. The SOFware chip copies the handoff in the browser and does not call this route. The unknown chip is inert.
+
+Nothing on the click posts, sends, merges, or starts a model turn. Quota, machine, and a waiting permission prompt stay inert text.
 
 One repo's git failure does not blank the local cards. `worktrees`, `agents` and `needs_you` keep the repos that worked and carry the failing repo's message in `error`, prefixed with the repo name. Only a failure in every repo leaves the cards without data.
 
