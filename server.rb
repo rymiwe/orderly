@@ -84,6 +84,7 @@ SEAT_USAGE_HISTORY = File.join(HOME, ".local/state/seat-usage/history.jsonl")
 HISTORY_TAIL_BYTES = 131_072
 # A pool burns when it rose within BURN_MOVED_S, and burns hard when it also
 # rose at least one pace over BURN_PACE_S. No reading for BURN_STALE_S: no burn.
+# burn_pph is that same 30-minute rise, in percentage points per hour.
 BURN_MOVED_S = 30 * 60
 BURN_PACE_S = 2 * 3600
 BURN_STALE_S = 20 * 60
@@ -1705,7 +1706,8 @@ class OpsTabServer
     {
       "seats" => seats.map do |seat|
         seat.merge(quota_renewal(cache, seat["seat"], seat["subscription"])).merge(quota_read(cache, seat))
-            .merge("burn" => quota_burn(history, seat, now))
+            .merge("burn" => quota_burn(history, seat, now),
+                   "burn_pph" => quota_burn_pph(history, seat, now))
       end,
       "host_suggestion" => fetch_host_suggestion
     }
@@ -1945,7 +1947,8 @@ class OpsTabServer
   # over the trailing BURN_PACE_S is at least one pace (100% over the window).
   # Only rows on the newest reading's reset count, so a reset is never a move.
   # A span with no reading before it counts as the full BURN_PACE_S, so a short
-  # history cannot overstate the rate.
+  # history cannot overstate the rate. The dot's colour is not this level; it
+  # is pool_burn_pph, below.
   def pool_burn(rows, now)
     return "none" unless rows.is_a?(Array) && !rows.empty?
 
@@ -1966,6 +1969,49 @@ class OpsTabServer
     hours = [(newest["read_ts"] - start["read_ts"]), BURN_PACE_S].max / 3600.0
     rate = (newest["used_pct"] - start["used_pct"]) / hours
     rate >= 100.0 / (window / 3600.0) ? "strong" : "soft"
+  end
+
+  # Percentage points per hour over the last BURN_MOVED_S, on the newest
+  # reading's reset only. Nil when that reading is older than BURN_STALE_S or
+  # there is no base row. The base is the newest same-reset row at or before
+  # the start of the window, or, if the history is shorter, the oldest
+  # same-reset row inside it. A short history is divided by the full window
+  # so it cannot overstate. A fall clamps to 0.
+  def pool_burn_pph(rows, now)
+    return nil unless rows.is_a?(Array) && !rows.empty?
+
+    newest = rows.last
+    return nil if now - newest["read_ts"] > BURN_STALE_S
+
+    same = rows.select { |r| same_reset?(r, newest) }
+    cutoff = now - BURN_MOVED_S
+    base = same.reverse.find { |r| r["read_ts"] <= cutoff }
+    if base
+      span = newest["read_ts"] - base["read_ts"]
+      return nil unless span.positive?
+
+      hours = span / 3600.0
+    else
+      window = same.select { |r| r["read_ts"] >= cutoff }
+      base = window.first
+      return nil unless base
+
+      span = newest["read_ts"] - base["read_ts"]
+      hours = [span, BURN_MOVED_S].max / 3600.0
+    end
+    rate = (newest["used_pct"] - base["used_pct"]) / hours
+    rate.negative? ? 0.0 : rate
+  end
+
+  # Fastest pool on this seat, in points per hour, to one decimal. Nil when
+  # every pool is stale or has no base. Does not change the soft/strong level.
+  def quota_burn_pph(history, seat, now)
+    return nil unless history.is_a?(Hash)
+
+    rates = quota_history_pools(seat["seat"]).filter_map { |pool| pool_burn_pph(history[pool], now) }
+    return nil if rates.empty?
+
+    rates.max.round(1)
   end
 
   def same_reset?(row, newest)

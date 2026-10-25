@@ -151,9 +151,15 @@ button.chip:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .seat.burn-soft,.seat.burn-strong{position:relative;isolation:isolate}
 .seat.burn-soft::after,.seat.burn-strong::after{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;border-radius:inherit;background:color-mix(in srgb,var(--warn) 7%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--warn) 40%,transparent)}
 /* Status dot beside the percentage. One 2s alternate on every active row.
-   Green is --good, yellow --warn, red --crit. The margin keeps the 3px ring
-   inside .v, which clips overflow. Every percent row reserves that same box.
-   A row that is not burning leaves the box empty so the percents line up. */
+   Colour is burn rate only: green below 5 pts/hr, yellow from 5 up to 15,
+   red at 15 and above (--good, --warn, --crit). The margin keeps the 3px
+   ring inside .v, which clips overflow. Every percent row reserves that
+   same box. A row that is not burning leaves the box empty so the percents
+   line up. newtab.js sets a negative animation-delay from the wall clock so
+   a poll rebuild continues the same breath.
+   Deliberate exception (Ryan 2026-10-25): this dot keeps breathing under
+   prefers-reduced-motion. The global rule at the bottom of this sheet still
+   turns transitions off. */
 .seat .v .dot.dot-green,.seat .v .dot.dot-yellow,.seat .v .dot.dot-red,.seat .v .dot.dot-none{display:inline-block;width:6px;height:6px;border-radius:50%;vertical-align:middle;margin:4px 6px}
 .seat .v .dot.dot-green,.seat .v .dot.dot-yellow,.seat .v .dot.dot-red{animation:dot-breathe 2s ease-in-out infinite alternate}
 .seat .v .dot.dot-none{visibility:hidden}
@@ -161,9 +167,6 @@ button.chip:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .seat .v .dot.dot-yellow{background:var(--warn);--dot:var(--warn)}
 .seat .v .dot.dot-red{background:var(--crit);--dot:var(--crit)}
 @keyframes dot-breathe{from{opacity:.45;box-shadow:0 0 0 0 color-mix(in srgb,var(--dot) 35%,transparent)}to{opacity:1;box-shadow:0 0 0 3px color-mix(in srgb,var(--dot) 35%,transparent)}}
-@media (prefers-reduced-motion: reduce){
-  .seat .v .dot.dot-green,.seat .v .dot.dot-yellow,.seat .v .dot.dot-red{animation:none;opacity:1;box-shadow:0 0 0 3px color-mix(in srgb,var(--dot) 35%,transparent)}
-}
 .drivers{grid-column:1/-1;margin-top:10px;padding-top:6px;border-top:1px solid var(--line)}
 .drivers .eyebrow{margin:0 0 3px}
 .drv{font-family:var(--mono);font-size:11px;color:var(--ink-2);padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
