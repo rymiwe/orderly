@@ -283,6 +283,30 @@ const tests = {
       assert.strictEqual(dot.attrs["data-dot"], "green", id);
     }
   },
+  async muse_out_of_usage_is_a_full_bar_and_names_the_reset() {
+    // 2:00 PM PDT, reset 5:00 PM PDT the same day. The rail's own clock drops
+    // :00 and says "5pm", the same way every other row's reset is written.
+    const fixed = Date.parse("2026-10-25T14:00:00-07:00");
+    const reset = "2026-10-25T17:00:00-07:00";
+    const seats = [
+      seat({
+        seat: "muse", label: "Muse · weekly", vendor: "muse", subscription: "muse",
+        status: "live", percent: 100, text: "out of usage", pace: "", exhausted: true,
+        resets_at: reset, window_s: 604800, burn: "none", verified_at: new Date(fixed).toISOString()
+      })
+    ];
+    const rail = await run(quota(seats, []), { now: fixed });
+    const r = row(rail, "muse");
+    assert.ok(r, "muse row missing");
+    const v = detail(r);
+    assert.ok(String(v.textContent).includes("out of usage"), v.textContent);
+    assert.ok(String(v.textContent).includes("resets 5pm"), v.textContent);
+    assert.ok(!/unknown|seat-usage has no value|%/.test(v.textContent), v.textContent);
+    const fill = r.all().find((n) => n.tagName === "i" && n.className === "crit");
+    assert.ok(fill, "capped fill missing");
+    assert.strictEqual(fill.style.width, "100%");
+    assert.strictEqual(dotOf(r), undefined, "out of usage drew a burn dot");
+  },
   async the_dot_breathes_for_two_seconds_and_the_row_does_not() {
     assert.match(CSS, /animation:\s*dot-breathe\s+2s\s+ease-in-out\s+infinite\s+alternate/);
     assert.match(CSS, /@keyframes\s+dot-breathe\s*\{/);

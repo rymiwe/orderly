@@ -2296,9 +2296,34 @@ class OpsTabServer
     ).merge("plan" => quota_str(cache, "codex_plan"), "five_hour" => five_hour)
   end
 
+  # seat-usage writes muse_exhausted and muse_exhausted_reset_ts into the cache
+  # JSON when a Muse turn comes back quota-exhausted. That is not a used
+  # percent. While the reset is still ahead the row is the same full bar the
+  # other capped seats use, and the words are "out of usage". The page adds
+  # "resets <time>" from resets_at with the rail's own clock. A reset that
+  # has already passed is not this state.
+  def muse_out_of_usage?(cache)
+    return false unless cache.is_a?(Hash) && cache["muse_exhausted"] == true
+
+    reset = quota_num(cache, "muse_exhausted_reset_ts")
+    !reset.nil? && reset > Time.now.to_f
+  end
+
   def quota_muse(cache, verified)
-    pct = quota_num(cache, "muse_week")
     label = "Muse · weekly"
+    if muse_out_of_usage?(cache)
+      return live_quota_seat(
+        seat: "muse",
+        label: label,
+        percent: 100,
+        text: "out of usage",
+        pace: "",
+        verified: verified,
+        window: quota_window(cache, "muse_exhausted_reset_ts", nil, WEEK_S)
+      ).merge("exhausted" => true)
+    end
+
+    pct = quota_num(cache, "muse_week")
     return unknown_quota_seat("muse", label, verified) if pct.nil?
 
     five = quota_num(cache, "muse_5h")

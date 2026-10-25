@@ -188,6 +188,73 @@ class QuotaTest < Minitest::Test
     assert_equal "strong", burn(weekly + five)
   end
 
+  def muse_row
+    seats.find { |s| s["seat"] == "muse" }
+  end
+
+  def test_an_exhausted_muse_quota_with_a_future_reset_is_out_of_usage
+    reset = NOW + 3 * 3600
+    write_cache("as_of" => { "muse" => NOW },
+                "muse_exhausted" => true,
+                "muse_exhausted_reset_ts" => reset)
+    row = muse_row
+    assert_equal ["live", 100, "out of usage", true, false],
+                 row.values_at("status", "percent", "text", "exhausted", "read_failed")
+    assert_equal iso(Time.at(reset)), row["resets_at"]
+    assert_equal WEEK_S, row["window_s"]
+    assert_nil row["note"]
+    assert_nil row["five_hour"]
+  end
+
+  def test_an_exhausted_muse_quota_outranks_a_carried_percent
+    write_cache("as_of" => { "muse" => NOW },
+                "muse_exhausted" => true,
+                "muse_exhausted_reset_ts" => NOW + 3600,
+                "muse_week" => 40, "muse_5h" => 12)
+    row = muse_row
+    assert_equal ["out of usage", 100, true], row.values_at("text", "percent", "exhausted")
+    assert_nil row["five_hour"]
+  end
+
+  def test_muse_falls_back_once_the_quota_reset_has_passed
+    write_cache("as_of" => { "muse" => NOW },
+                "muse_exhausted" => true,
+                "muse_exhausted_reset_ts" => NOW - 60)
+    row = muse_row
+    assert_equal ["unknown", "unknown", "seat-usage has no value"], row.values_at("status", "text", "note")
+    assert_nil row["exhausted"]
+
+    write_cache("as_of" => { "muse" => NOW },
+                "muse_exhausted" => true,
+                "muse_exhausted_reset_ts" => NOW - 60,
+                "muse_week" => 18, "muse_5h" => 4)
+    row = muse_row
+    assert_equal ["live", 18, "18% · 5h 4%"], row.values_at("status", "percent", "text")
+    assert_nil row["exhausted"]
+    assert_equal 4, row["five_hour"]["percent"]
+  end
+
+  def test_a_muse_flag_without_a_future_reset_is_not_out_of_usage
+    write_cache("as_of" => { "muse" => NOW }, "muse_exhausted" => true, "muse_week" => 22)
+    row = muse_row
+    assert_equal ["live", 22, "22%"], row.values_at("status", "percent", "text")
+    assert_nil row["exhausted"]
+
+    write_cache("as_of" => { "muse" => NOW }, "muse_exhausted" => "yes",
+                "muse_exhausted_reset_ts" => NOW + 3600, "muse_week" => 22)
+    row = muse_row
+    assert_equal "22%", row["text"]
+    assert_nil row["exhausted"]
+  end
+
+  def test_a_normal_muse_percent_is_unchanged
+    write_cache("as_of" => { "muse" => NOW }, "muse_week" => 18, "muse_5h" => 4)
+    row = muse_row
+    assert_equal ["live", 18, "18% · 5h 4%"], row.values_at("status", "percent", "text")
+    assert_nil row["exhausted"]
+    assert_equal WEEK_S, row["window_s"]
+  end
+
   def test_muse_does_not_burn_from_another_seats_pool
     rows = series("claude weekly all", 180, 0) { |ago| 100 - ago / 2.0 }
     assert_equal "none", burn(rows, "muse")
