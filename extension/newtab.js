@@ -436,6 +436,7 @@
     }).then(function (result) {
       if (result.ok && result.body.run_cmd) {
         copyText(result.body.run_cmd);
+        if (row.last_action && row.last_action.status === "failed") delete row.last_action;
         stagedFlash[row.row_key] = "staged (cmd copied)";
       } else {
         stagedFlash[row.row_key] = result.body && result.body.error ? String(result.body.error) : "stage failed";

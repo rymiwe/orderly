@@ -152,6 +152,21 @@ const tests = {
     assert.strictEqual(stageCalls(fetches).length, 0);
     assert.deepStrictEqual(copied, []);
     assert.ok(needs.textContent.includes("Add repo/team to profile.json lanes"), needs.textContent);
+  },
+
+  async successful_stage_clears_stale_failure_and_shows_flash() {
+    const row = Object.assign({}, rows[3], {
+      last_action: { action: "loop", status: "failed", code: 1, since: "2026-10-24T12:00:00Z" }
+    });
+    const { needs, copied } = await run([row]);
+    assert.ok(needs.all().some((n) => n.attrs && n.attrs["data-pill"] === "failed"), needs.textContent);
+    buttons(needs).find((b) => b.attrs["data-action"] === "loop").click();
+    await new Promise((r) => setTimeout(r, 30));
+    assert.ok(copied.includes("echo staged-fixture"), copied.join("|"));
+    const flash = needs.all().find((n) => n.attrs && n.attrs["data-flash"] === "1");
+    assert.ok(flash, needs.textContent);
+    assert.strictEqual(flash.textContent, "staged (cmd copied)");
+    assert.ok(!needs.all().some((n) => n.attrs && n.attrs["data-pill"] === "failed"), needs.textContent);
   }
 };
 
