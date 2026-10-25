@@ -1146,12 +1146,66 @@
     return headers;
   }
 
-  // A pool that moved in the last 30 minutes glows (burn-soft); one that also
-  // rose at least one pace over two hours glows harder (burn-strong). The
-  // server decides the level from seat-usage's history; this only maps it.
+  // A pool that moved in the last 30 minutes is burn-soft; one that also rose
+  // at least one pace over two hours is burn-strong. The server decides that
+  // from seat-usage's history. The row only keeps a static outline. The level
+  // is the dot beside the percentage, and only on a live seat that is burning.
+  // Every row that shows a percent reserves the dot's box. An inactive percent
+  // row leaves that box empty so the column lines up. A row with no percent
+  // does not reserve it.
   var BURN_TITLE = { soft: "burning in the last 30 min", strong: "burning above pace in the last 30 min" };
   function burnClass(seat, live) {
     return live && BURN_TITLE[seat.burn] ? " burn-" + seat.burn : "";
+  }
+  function burnActive(seat, live) {
+    return !!(live && (seat.burn === "soft" || seat.burn === "strong"));
+  }
+  // Dot colour, first match. pct is the seat's used percent (0-100) and
+  // elapsed is the share of its window already gone; caps is the capsLabel
+  // result, or null.
+  //   red    — caps early, or pace "ahead", or pct >= 100.
+  //   yellow — otherwise pace "on", or burn "strong" (the last 2h rose at
+  //            least one pace, so this seat is near pace right now).
+  //   green  — otherwise: pace "under" on a soft burn.
+  // Empty or unknown pace, when elapsed is known, uses the meter's split:
+  // pct > elapsed is yellow (red only when caps early, already returned);
+  // pct <= elapsed is green, unless burn is strong (yellow, already returned).
+  // Unknown pace with no elapsed share is green unless a rule above hit.
+  function dotColor(seat, pct, elapsed, caps) {
+    var pace = seat && seat.pace;
+    var n = pct != null && !isNaN(Number(pct)) ? Number(pct) : null;
+    var e = elapsed != null && !isNaN(Number(elapsed)) ? Number(elapsed) : null;
+    if (caps || pace === "ahead" || (n != null && n >= 100)) return "red";
+    if (pace === "on" || (seat && seat.burn === "strong")) return "yellow";
+    if (pace === "under") return "green";
+    if (e != null && n != null && n > e) return "yellow";
+    return "green";
+  }
+  function dotTitle(seat, color, caps) {
+    var why = "under pace";
+    if (color === "red") why = seat.pace === "ahead" ? "ahead of pace" : caps ? "caps early" : "full";
+    else if (color === "yellow") why = seat.pace === "on" ? "on pace" : seat.burn === "strong" ? "near pace" : "ahead of the window";
+    return "in use · " + why;
+  }
+  function usageDot(seat, pct, elapsed, caps) {
+    var color = dotColor(seat, pct, elapsed, caps);
+    return el("span", {
+      class: "dot dot-" + color,
+      "data-dot": color,
+      title: dotTitle(seat, color, caps),
+      "aria-hidden": "true"
+    });
+  }
+  // Same box as the coloured dot, including its margin. Hidden, so it adds no
+  // words to the detail text or tooltip, and it does not animate.
+  function usageSlot() {
+    return el("span", { class: "dot dot-none", "aria-hidden": "true" });
+  }
+  function showsPercent(parts) {
+    if (!parts.length) return false;
+    var first = parts[0];
+    var text = typeof first === "string" ? first : (first && first.textContent) || "";
+    return String(text).indexOf("%") !== -1;
   }
 
   // One line per local tool with a working session: label and pool, no rates.
@@ -1205,7 +1259,7 @@
       if (ownHeader) rows.push(ownHeader);
       var rowCls = ["seat", vendor, absent ? "absent" : "", vendor !== prevVendor && !ownHeader ? "vendor-start" : "", vendor !== nextVendor ? "vendor-end" : ""].filter(Boolean).join(" ");
       prevVendor = vendor;
-      var bar, track, fill, pct, cls, parts, g, verified, reset, elapsed, caps, detail, ageMs, renewal;
+      var bar, track, fill, pct, cls, parts, g, verified, reset, elapsed, caps, detail, ageMs, renewal, dot;
       // An ended plan gets a full grey bar and no usage, pace, or reset.
       if (subEnded(seat, now)) {
         track = el("span", { class: "track ended" });
@@ -1290,12 +1344,21 @@
       }
       caps = pct != null && elapsed != null ? capsLabel(pct, elapsed, Number(seat.window_s)) : null;
       // The caps warning goes right after the percentage, so a narrow row
-      // cuts the reset day, not the warning.
+      // cuts the reset day, not the warning. The dot sits in front of that
+      // percentage on every live row the server marked soft or strong. Any
+      // other row that shows a percent keeps an empty slot in that same place.
+      // Absent, unknown, and ended rows have no percent and no slot.
       if (caps) parts.splice(1, 0, el("span", { class: "caps", title: caps.title }, caps.text));
       detail = el("span", { class: "v" });
-      parts.forEach(function (p, i) { if (i) detail.append(" · "); detail.append(p); });
+      dot = burnActive(seat, live) ? usageDot(seat, pct, elapsed, caps) : (showsPercent(parts) ? usageSlot() : null);
+      parts.forEach(function (p, i) {
+        if (i === 0 && dot) detail.append(dot);
+        if (i) detail.append(" · ");
+        detail.append(p);
+      });
+      if (!parts.length && dot) detail.append(dot);
       detail.title = absent && seat.note ? seat.note + " " + detail.textContent : detail.textContent;
-      // The burn level only changes the row's class; the row has no burn text.
+      // The row has no burn text. The dot's title and this tooltip carry it.
       if (live && BURN_TITLE[seat.burn]) detail.title += " · " + BURN_TITLE[seat.burn];
       rows.push(el("div", { class: rowCls + burnClass(seat, live), "data-seat": seat.seat, "data-burn": live && BURN_TITLE[seat.burn] ? seat.burn : null }, seatLabel(seat), bar, detail));
     });

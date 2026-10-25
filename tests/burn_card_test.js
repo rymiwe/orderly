@@ -1,6 +1,11 @@
-// Quota rail burn glow and running-now list. Runs newtab.js against the same
-// tiny DOM stub as machines_card_test.js (plus first/lastChild, which the rail
-// uses) with one /cards payload. No network.
+// Quota rail burn outline, status dot, and running-now list. Runs newtab.js
+// against the same tiny DOM stub as machines_card_test.js (plus first/lastChild,
+// which the rail uses) with one /cards payload. No network.
+// The dot colour is reached the same way as the other helpers in this file:
+// render a seat and read the DOM. newtab.js is an IIFE and exports nothing.
+// No existing assertion checked the row keyframes or the strong row's thicker
+// left edge, so none of those assertions were rewritten. The CSS checks below
+// cover that removal.
 // Run: node tests/burn_card_test.js
 "use strict";
 const fs = require("fs"), path = require("path"), vm = require("vm"), assert = require("assert");
@@ -59,6 +64,83 @@ const SEATS = [
   seat({ seat: "supergrok", label: "SuperGrok", vendor: "grok", subscription: "grok", status: "unknown", percent: null, text: "unknown", burn: "strong" })
 ];
 const row = (rail, id) => rail.all().find((n) => n.attrs && n.attrs["data-seat"] === id);
+const detail = (r) => r.all().find((n) => n.className === "v");
+const dotOf = (r) => {
+  const v = detail(r);
+  return v ? v.all().find((n) => n.attrs && Object.prototype.hasOwnProperty.call(n.attrs, "data-dot")) : null;
+};
+const slotOf = (r) => {
+  const v = detail(r);
+  return v ? v.all().find((n) => n.className && n.className.split(/\s+/).includes("dot-none")) : null;
+};
+// resets_at that puts `elapsed` percent of windowS behind now. A few
+// milliseconds of render delay does not move the percent.
+function resetsForElapsed(elapsed, windowS = 604800) {
+  return new Date(now.getTime() + ((100 - elapsed) / 100) * windowS * 1000).toISOString();
+}
+function painted(o) {
+  return seat(Object.assign({
+    resets_at: resetsForElapsed(o.elapsed == null ? 50 : o.elapsed),
+    window_s: 604800,
+    verified_at: now.toISOString()
+  }, o));
+}
+
+const HTML = fs.readFileSync(path.join(__dirname, "..", "extension", "newtab.html"), "utf8");
+const CSS = HTML.replace(/\/\*[\s\S]*?\*\//g, "");
+
+function cssRules(src) {
+  const rules = [];
+  let i = 0;
+  const skip = () => { while (i < src.length && /\s/.test(src[i])) i++; };
+  while (i < src.length) {
+    skip();
+    if (i >= src.length) break;
+    const brace = src.indexOf("{", i);
+    if (brace < 0) break;
+    const head = src.slice(i, brace).trim();
+    i = brace + 1;
+    let depth = 1;
+    const start = i;
+    while (i < src.length && depth) {
+      if (src[i] === "{") depth++;
+      else if (src[i] === "}") depth--;
+      i++;
+    }
+    const body = src.slice(start, i - 1);
+    if (head.startsWith("@media")) rules.push({ at: head, nested: cssRules(body) });
+    else if (!head.startsWith("@")) rules.push({ sel: head, body });
+  }
+  return rules;
+}
+function walkRules(rules, fn) {
+  rules.forEach((r) => { if (r.nested) walkRules(r.nested, fn); else fn(r); });
+}
+// A row selector's rightmost compound is the seat itself (or its pseudo),
+// not a descendant such as `.seat .v .dot`.
+function isSeatRowSelector(sel) {
+  return sel.split(",").some((part) => {
+    const bits = part.trim().split(/\s*[>+~]\s*|\s+/).filter(Boolean);
+    return bits.length > 0 && /^\.seat(?![-\w])/.test(bits[bits.length - 1]);
+  });
+}
+function reducedMotionBlocks(css) {
+  const out = [];
+  const re = /@media\s*\(\s*prefers-reduced-motion:\s*reduce\s*\)\s*\{/g;
+  let m;
+  while ((m = re.exec(css))) {
+    let i = m.index + m[0].length;
+    let depth = 1;
+    const start = i;
+    while (i < css.length && depth) {
+      if (css[i] === "{") depth++;
+      else if (css[i] === "}") depth--;
+      i++;
+    }
+    out.push(css.slice(start, i - 1));
+  }
+  return out;
+}
 
 const tests = {
   async live_rows_get_the_burn_class_and_others_do_not() {
@@ -88,6 +170,104 @@ const tests = {
       const rail = await run(quota(SEATS, drivers));
       assert.ok(!rail.all().some((n) => n.className === "drivers"), "empty drivers drew a block");
     }
+  },
+  async dot_colour_follows_pace_caps_and_burn() {
+    const cases = [
+      { name: "ahead", seat: "a", pace: "ahead", burn: "soft", percent: 20, text: "20%", elapsed: 50, color: "red", title: "in use · ahead of pace" },
+      { name: "caps early", seat: "b", pace: "under", burn: "soft", percent: 70, text: "70%", elapsed: 40, color: "red", title: "in use · caps early" },
+      { name: "full", seat: "c", pace: "under", burn: "soft", percent: 100, text: "100%", elapsed: 50, color: "red", title: "in use · full" },
+      { name: "on pace", seat: "d", pace: "on", burn: "soft", percent: 40, text: "40%", elapsed: 50, color: "yellow", title: "in use · on pace" },
+      { name: "under strong", seat: "e", pace: "under", burn: "strong", percent: 20, text: "20%", elapsed: 50, color: "yellow", title: "in use · near pace" },
+      { name: "under soft", seat: "f", pace: "under", burn: "soft", percent: 20, text: "20%", elapsed: 50, color: "green", title: "in use · under pace" },
+      // Empty pace falls back to the meter's split. elapsed 5 skips caps
+      // (the projection is ignored in the first tenth of the window).
+      { name: "unknown pace over elapsed", seat: "g", pace: "", burn: "soft", percent: 8, text: "8%", elapsed: 5, color: "yellow", title: "in use · ahead of the window" },
+      { name: "unknown pace under elapsed", seat: "h", pace: "", burn: "soft", percent: 20, text: "20%", elapsed: 50, color: "green", title: "in use · under pace" },
+      { name: "unknown pace strong", seat: "i", pace: "", burn: "strong", percent: 20, text: "20%", elapsed: 50, color: "yellow", title: "in use · near pace" }
+    ];
+    const seats = cases.map((c) => painted({
+      seat: c.seat, label: c.name, pace: c.pace, burn: c.burn, percent: c.percent, text: c.text, elapsed: c.elapsed,
+      vendor: "claude", subscription: "claude"
+    }));
+    const rail = await run(quota(seats, []));
+    for (const c of cases) {
+      const r = row(rail, c.seat);
+      const dot = dotOf(r);
+      assert.ok(dot, `${c.name} has no dot`);
+      assert.strictEqual(dot.attrs["data-dot"], c.color, c.name);
+      assert.strictEqual(dot.className, "dot dot-" + c.color, c.name);
+      assert.strictEqual(dot.attrs.title, c.title, c.name);
+      assert.strictEqual(dot.attrs["aria-hidden"], "true", c.name);
+      assert.strictEqual(r.attrs["data-burn"], c.burn, c.name);
+      const v = detail(r);
+      assert.strictEqual(v.children[0], dot, `${c.name} dot is not beside the percentage`);
+      assert.ok(String(v.children[1].textContent).includes("%"), `${c.name} percent missing`);
+      if (c.name === "caps early") assert.ok(/caps /.test(v.textContent), v.textContent);
+    }
+  },
+  async inactive_percent_rows_reserve_an_empty_slot() {
+    const seats = [
+      painted({ seat: "idle", label: "Idle", burn: "none", pace: "under", percent: 30, text: "30%", elapsed: 50 }),
+      painted({ seat: "quiet", label: "Quiet", burn: "soft", status: "unknown", percent: null, text: "unknown", pace: "ahead", elapsed: 50 }),
+      painted({ seat: "gone", label: "Gone", burn: "strong", status: "absent", percent: null, text: "not on this plan", pace: "ahead", elapsed: 50 })
+    ];
+    const rail = await run(quota(seats, []));
+    const idle = row(rail, "idle");
+    const slot = slotOf(idle);
+    assert.ok(slot, "idle percent row has no slot");
+    assert.strictEqual(slot.className, "dot dot-none");
+    assert.strictEqual(slot.attrs["aria-hidden"], "true");
+    assert.ok(!("title" in slot.attrs), "placeholder has a title");
+    assert.ok(!("data-dot" in slot.attrs), "placeholder is a coloured dot");
+    assert.strictEqual(dotOf(idle), undefined, "idle drew a coloured dot");
+    const v = detail(idle);
+    assert.strictEqual(v.children[0], slot, "slot is not beside the percentage");
+    assert.strictEqual(slot.textContent, "");
+    assert.ok(String(v.textContent).includes("30%"), v.textContent);
+    assert.ok(!/in use|burning/.test(v.textContent), v.textContent);
+    // The detail tooltip is the row text. The empty slot adds no words to it.
+    assert.strictEqual(v.title, v.textContent);
+    assert.ok(String(v.title).includes("30%"), v.title);
+    assert.ok(!/in use|burning/.test(v.title), v.title);
+    assert.ok(!("data-burn" in idle.attrs), "idle has data-burn");
+    for (const id of ["quiet", "gone"]) {
+      const r = row(rail, id);
+      assert.ok(r, id);
+      assert.strictEqual(dotOf(r), undefined, `${id} drew a dot`);
+      assert.strictEqual(slotOf(r), undefined, `${id} reserved a slot`);
+      assert.ok(!("data-burn" in r.attrs), `${id} has data-burn`);
+    }
+    assert.match(CSS, /\.dot-none\{[^}]*visibility:\s*hidden/);
+    assert.ok(!/\.dot\.dot-none[^{]*\{[^}]*dot-breathe/.test(CSS), "the empty slot breathes");
+  },
+  async every_burning_row_gets_a_dot_not_only_the_next_host() {
+    const seats = [
+      painted({ seat: "claude_weekly", label: "Claude", burn: "soft", pace: "under", percent: 20, text: "20%", elapsed: 50, vendor: "claude", subscription: "claude" }),
+      painted({ seat: "cursor_models", label: "Cursor Models", burn: "soft", pace: "under", percent: 25, text: "25%", elapsed: 50, vendor: "cursor", subscription: "cursor" })
+    ];
+    const rail = await run(quota(seats, []));
+    // host_suggestion is null in quota(): neither row is the next host.
+    for (const id of ["claude_weekly", "cursor_models"]) {
+      const dot = dotOf(row(rail, id));
+      assert.ok(dot, id);
+      assert.strictEqual(dot.attrs["data-dot"], "green", id);
+    }
+  },
+  async the_dot_breathes_for_two_seconds_and_the_row_does_not() {
+    assert.match(CSS, /animation:\s*dot-breathe\s+2s\s+ease-in-out\s+infinite\s+alternate/);
+    assert.match(CSS, /@keyframes\s+dot-breathe\s*\{/);
+    assert.ok(!/burn-breathe/.test(CSS), "row breathe keyframes still present");
+    assert.ok(!/border-left-width\s*:\s*6px/.test(CSS), "strong row still thickens the left bar");
+    assert.ok(!/padding-left\s*:\s*5px/.test(CSS), "strong row still changes padding");
+    const blocks = reducedMotionBlocks(CSS);
+    assert.ok(blocks.length > 0, "no prefers-reduced-motion block");
+    assert.ok(blocks.some((b) => /\.dot[\s\S]*?\{[\s\S]*?animation\s*:\s*none/.test(b)),
+      "reduced motion does not set animation:none on the dot");
+    const animatedRows = [];
+    walkRules(cssRules(CSS), (r) => {
+      if (/animation\s*:/.test(r.body) && isSeatRowSelector(r.sel)) animatedRows.push(r.sel);
+    });
+    assert.deepStrictEqual(animatedRows, []);
   }
 };
 
