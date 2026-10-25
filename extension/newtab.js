@@ -2,6 +2,7 @@
   var portParam = new URLSearchParams(location.search).get("port") || "";
   var CARDS_PORT = /^\d+$/.test(portParam) ? portParam : "5180";
   var CARDS_URL = "http://127.0.0.1:" + CARDS_PORT + "/cards";
+  var STAGE_URL = "http://127.0.0.1:" + CARDS_PORT + "/actions/stage";
   var POLL_MS = 5000;
   // Dot colour is burn rate only, in percentage points per hour. Green below
   // 5, yellow from 5 up to 15, red at 15 and above.
@@ -60,6 +61,9 @@
 
   var payload = null;
   var fetchError = null;
+  // Click feedback for this page load. Failure pills come from the server and
+  // outlive a reload; this map does not.
+  var stagedFlash = {};
   var query = "";
   var idleOpen = false;
   var otherOpen = false;
@@ -376,6 +380,116 @@
     metaEl.replaceChildren.apply(metaEl, kids);
   }
 
+  function laneChip(row) {
+    if (row.lane === "personal") return el("span", { class: "chip", "data-lane": "personal" }, "personal");
+    if (row.lane === "sofware") return el("span", { class: "chip", "data-lane": "sofware" }, "sofware");
+    if (row.lane === "unknown") {
+      var b = el("button", {
+        class: "chip inert", type: "button", "data-lane": "unknown",
+        title: "Add repo/team to profile.json lanes"
+      }, "lane?");
+      b.addEventListener("click", function (e) {
+        e.preventDefault();
+        stagedFlash[row.row_key] = "Add repo/team to profile.json lanes";
+        render();
+      });
+      return b;
+    }
+    return null;
+  }
+
+  function wesChip(row) {
+    var text = row.wes && row.wes.copy_text;
+    var b = el("button", { class: "chip", type: "button", "data-action": "wes", title: text || "" }, "wes");
+    b.addEventListener("click", function (e) {
+      e.preventDefault();
+      if (!text) return;
+      copyText(text);
+      stagedFlash[row.row_key] = "copied";
+      render();
+    });
+    return b;
+  }
+
+  function stageChip(row, action) {
+    var id = action && action.id;
+    var b = el("button", { class: "chip", type: "button", "data-action": id || "" }, (action && action.label) || id || "");
+    b.addEventListener("click", function (e) {
+      e.preventDefault();
+      if (!id) return;
+      postStage(row, id);
+    });
+    return b;
+  }
+
+  // Copies the run command the server returns. Does not run it.
+  function postStage(row, actionId) {
+    var token = payload && payload.action_token ? String(payload.action_token) : "";
+    fetch(STAGE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Orderly-Token": token },
+      body: JSON.stringify({ row_key: row.row_key, action: actionId })
+    }).then(function (res) {
+      return res.json().then(function (body) {
+        return { ok: res.ok, body: body || {} };
+      }, function () { return { ok: false, body: {} }; });
+    }).then(function (result) {
+      if (result.ok && result.body.run_cmd) {
+        copyText(result.body.run_cmd);
+        stagedFlash[row.row_key] = "staged (cmd copied)";
+      } else {
+        stagedFlash[row.row_key] = result.body && result.body.error ? String(result.body.error) : "stage failed";
+      }
+      render();
+    }).catch(function () {
+      stagedFlash[row.row_key] = "stage failed";
+      render();
+    });
+  }
+
+  function failurePill(row) {
+    var la = row.last_action;
+    if (!la) return null;
+    if (la.status === "failed") {
+      var name = la.action || "action";
+      var code = la.code == null || la.code === "" ? "" : " (exit " + la.code + ")";
+      return el("span", { class: "chip crit", "data-pill": "failed" }, name + " failed" + code);
+    }
+    if (la.status === "refused_lane") {
+      return el("span", { class: "chip crit", "data-pill": "refused" }, "refused: " + (la.error || "lane"));
+    }
+    return null;
+  }
+
+  function flashChip(row) {
+    if (row.last_action && row.last_action.status === "failed") {
+      delete stagedFlash[row.row_key];
+      return null;
+    }
+    var text = stagedFlash[row.row_key];
+    if (!text) return null;
+    return el("span", { class: "chip", "data-flash": "1" }, text);
+  }
+
+  function needsActs(row) {
+    var bits = [];
+    if (row.action_url) bits.push(el("a", { class: "act", href: row.action_url }, row.action || ""));
+    else if (row.action) bits.push(el("span", { class: "act" }, row.action));
+    var lane = laneChip(row);
+    if (lane) bits.push(lane);
+    if (row.lane === "sofware" && row.wes && row.wes.copy_text) bits.push(wesChip(row));
+    if (row.lane === "personal") {
+      (Array.isArray(row.actions) ? row.actions : []).forEach(function (action) {
+        bits.push(stageChip(row, action));
+      });
+    }
+    var pill = failurePill(row);
+    if (pill) bits.push(pill);
+    var flash = flashChip(row);
+    if (flash) bits.push(flash);
+    return bits;
+  }
+
   function renderNeeds(now) {
     var c = card("needs_you");
     var rows, shown, headRight, i, row, why;
@@ -410,9 +524,7 @@
             row.kind === "machine" ? el("span", { class: "chip" }, "fleet") : null
           ),
           el("span", null, row.title || "", el("br"), el("span", { class: "why" }, why)),
-          row.action_url
-            ? el("a", { class: "act", href: row.action_url }, row.action || "")
-            : el("span", { class: "act" }, row.action || "")
+          el("span", { class: "acts" }, needsActs(row))
         );
       }))
     );
