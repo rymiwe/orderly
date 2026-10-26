@@ -180,6 +180,19 @@ A missing heartbeat does not satisfy rule 2. Quota rows stay last; machine rows 
 
 Tests for this card: `node tests/machines_card_test.js` (the page, against a DOM stub) and `ruby tests/machines_test.rb` (the payload and the needs-you rule).
 
+## Tests
+
+`test/run.sh` runs every suite in `test/` and `tests/` (Ruby with `ruby`, the page tests with `node`), prints one line per file, and exits non-zero if any failed.
+
+`test/cards_expect_test.rb` is an expect (snapshot) test of the `/cards` payload. Each directory in `test/fixtures/cards/` is one state (`empty`, `typical`, `capped`): `sources.json` holds what each source last returned, and the optional `seat-usage.json`, `history.jsonl` and `machines.json` go through the real quota and machines readers. The test renders `/cards` through `handle_cards` and compares it with `test/expect/cards/<case>.json`. gh, Linear, op, seat-usage, the fleet reader and HTTP are stubbed, the clock is frozen at 2026-10-26T12:00:00Z, and the host name is fixed. Keys are sorted, and the temp HOME is written as `$HOME`.
+
+When a change to `/cards` is intended, rewrite the expected files and review the diff:
+
+    UPDATE_EXPECT=1 ruby test/cards_expect_test.rb
+    git diff test/expect/cards
+
+A new state is a new fixture directory; the first `UPDATE_EXPECT=1` run writes its expected file.
+
 ## Smoke pings
 
 Every worktree row with an `app_port` (never a db port) gets `pings`: `GET http://127.0.0.1:<port><path>` with a 2 second timeout, no redirects. Green on 200 or 302.

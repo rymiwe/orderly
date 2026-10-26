@@ -1,0 +1,443 @@
+{
+  "action_token": "00000000000000000000000000000000",
+  "cards": {
+    "agents": {
+      "data": null,
+      "error": "no data yet",
+      "fetched_at": null
+    },
+    "linear": {
+      "data": null,
+      "error": "no data yet",
+      "fetched_at": null
+    },
+    "machines": {
+      "data": null,
+      "error": "no data yet",
+      "fetched_at": null
+    },
+    "needs_you": {
+      "data": [
+        {
+          "action": "/usage",
+          "actions": [
+
+          ],
+          "ask_from": null,
+          "change_token": "exhausted:false|pct:100",
+          "clear_key": "quota:claude_weekly",
+          "detail": "100% · 5h 100% · ahead of pace",
+          "dim": false,
+          "id": "Claude Max",
+          "kind": "quota",
+          "reason": "quota",
+          "row_key": "quota:Claude Max:Claude Max:usage",
+          "since": "2026-10-26T11:59:00Z",
+          "source": "quota",
+          "subkind": "usage",
+          "tier": "informational",
+          "title": "Claude Max · weekly at 100%",
+          "worktree": null
+        },
+        {
+          "action": "/usage",
+          "actions": [
+
+          ],
+          "ask_from": null,
+          "change_token": "exhausted:false|pct:97",
+          "clear_key": "quota:claude_fable",
+          "detail": "97% · ahead of pace",
+          "dim": false,
+          "id": "Claude Max",
+          "kind": "quota",
+          "reason": "quota",
+          "row_key": "quota:Claude Max:Claude Max:usage",
+          "since": "2026-10-26T11:59:00Z",
+          "source": "quota",
+          "subkind": "usage",
+          "tier": "informational",
+          "title": "Claude Max · Fable slice at 97%",
+          "worktree": null
+        },
+        {
+          "action": "codex",
+          "actions": [
+
+          ],
+          "ask_from": null,
+          "change_token": "exhausted:false|pct:88",
+          "clear_key": "quota:codex",
+          "detail": "88% · 5h 64% · ahead of pace",
+          "dim": false,
+          "id": "Codex",
+          "kind": "quota",
+          "reason": "quota",
+          "row_key": "quota:Codex:Codex:usage",
+          "since": "2026-10-26T11:59:00Z",
+          "source": "quota",
+          "subkind": "usage",
+          "tier": "informational",
+          "title": "Codex · weekly at 88%",
+          "worktree": null
+        },
+        {
+          "action": "cursor-agent",
+          "actions": [
+
+          ],
+          "ask_from": null,
+          "change_token": "exhausted:false|pct:92",
+          "clear_key": "quota:cursor_models",
+          "detail": "92% · ahead of pace",
+          "dim": false,
+          "id": "Cursor Pro",
+          "kind": "quota",
+          "reason": "quota",
+          "row_key": "quota:Cursor Pro:Cursor Pro:usage",
+          "since": "2026-10-26T11:59:00Z",
+          "source": "quota",
+          "subkind": "usage",
+          "tier": "informational",
+          "title": "Cursor Pro · Cursor Models at 92%",
+          "worktree": null
+        },
+        {
+          "action": "cursor-agent",
+          "actions": [
+
+          ],
+          "ask_from": null,
+          "change_token": "exhausted:false|pct:100",
+          "clear_key": "quota:cursor_other",
+          "detail": "100% · ahead of pace",
+          "dim": false,
+          "id": "Cursor Pro",
+          "kind": "quota",
+          "reason": "quota",
+          "row_key": "quota:Cursor Pro:Cursor Pro:usage",
+          "since": "2026-10-26T11:59:00Z",
+          "source": "quota",
+          "subkind": "usage",
+          "tier": "informational",
+          "title": "Cursor Pro · Other Models at 100%",
+          "worktree": null
+        },
+        {
+          "action": "Grok Bot",
+          "actions": [
+
+          ],
+          "ask_from": null,
+          "change_token": "exhausted:true|pct:100",
+          "clear_key": "quota:grokbot",
+          "detail": "",
+          "dim": false,
+          "id": "Grok Bot",
+          "kind": "quota",
+          "reason": "quota",
+          "row_key": "quota:Grok Bot:Grok Bot:usage",
+          "since": "2026-10-26T11:59:00Z",
+          "source": "quota",
+          "subkind": "usage",
+          "tier": "informational",
+          "title": "Grok Bot exhausted",
+          "worktree": null
+        },
+        {
+          "action": "grok",
+          "actions": [
+
+          ],
+          "ask_from": null,
+          "change_token": "exhausted:true|pct:100",
+          "clear_key": "quota:supergrok",
+          "detail": "402 2.5h ago",
+          "dim": false,
+          "id": "SuperGrok",
+          "kind": "quota",
+          "reason": "quota",
+          "row_key": "quota:SuperGrok:SuperGrok:usage",
+          "since": "2026-10-26T11:59:00Z",
+          "source": "quota",
+          "subkind": "usage",
+          "tier": "informational",
+          "title": "SuperGrok exhausted",
+          "worktree": null
+        },
+        {
+          "action": "muse",
+          "actions": [
+
+          ],
+          "ask_from": null,
+          "change_token": "exhausted:true|pct:100",
+          "clear_key": "quota:muse",
+          "detail": "out of usage",
+          "dim": false,
+          "id": "Muse",
+          "kind": "quota",
+          "reason": "quota",
+          "row_key": "quota:Muse:Muse:usage",
+          "since": "2026-10-26T11:59:00Z",
+          "source": "quota",
+          "subkind": "usage",
+          "tier": "informational",
+          "title": "Muse exhausted",
+          "worktree": null
+        }
+      ],
+      "error": null,
+      "fetched_at": "2026-10-26T11:59:30Z",
+      "pending_keys": [
+
+      ],
+      "snoozed": 0,
+      "snoozed_keys": [
+
+      ]
+    },
+    "prs": {
+      "data": null,
+      "error": "no data yet",
+      "fetched_at": null
+    },
+    "quota": {
+      "data": {
+        "host_suggestion": null,
+        "seats": [
+          {
+            "burn": "none",
+            "burn_pph": null,
+            "five_hour": {
+              "percent": 100,
+              "resets_at": "2026-10-26T13:00:00Z",
+              "window_s": 18000
+            },
+            "label": "Claude Max · weekly",
+            "note": null,
+            "pace": "ahead",
+            "percent": 100,
+            "plan": "max_5x",
+            "read_failed": false,
+            "renews": null,
+            "renews_at": null,
+            "renews_date_only": false,
+            "renews_on": null,
+            "renews_source": null,
+            "resets_at": "2026-10-27T12:00:00Z",
+            "seat": "claude_weekly",
+            "status": "live",
+            "text": "100% · 5h 100% · ahead of pace",
+            "users": [
+
+            ],
+            "verified_at": "2026-10-26T11:59:00Z",
+            "window_s": 604800
+          },
+          {
+            "burn": "none",
+            "burn_pph": null,
+            "label": "Claude Max · Fable slice",
+            "note": null,
+            "pace": "ahead",
+            "percent": 97,
+            "plan": "max_5x",
+            "read_failed": false,
+            "renews": null,
+            "renews_at": null,
+            "renews_date_only": false,
+            "renews_on": null,
+            "renews_source": null,
+            "resets_at": "2026-10-27T12:00:00Z",
+            "seat": "claude_fable",
+            "status": "live",
+            "text": "97% · ahead of pace",
+            "users": [
+
+            ],
+            "verified_at": "2026-10-26T11:59:00Z",
+            "window_s": 604800
+          },
+          {
+            "burn": "strong",
+            "burn_pph": 4.0,
+            "five_hour": {
+              "percent": 64,
+              "resets_at": "2026-10-26T14:00:00Z",
+              "window_s": 18000
+            },
+            "label": "Codex · weekly",
+            "note": "plus",
+            "pace": "ahead",
+            "percent": 88,
+            "plan": "plus",
+            "read_failed": false,
+            "renews": null,
+            "renews_at": null,
+            "renews_date_only": false,
+            "renews_on": null,
+            "renews_source": null,
+            "resets_at": "2026-10-30T12:00:00Z",
+            "seat": "codex",
+            "status": "live",
+            "text": "88% · 5h 64% · ahead of pace",
+            "users": [
+
+            ],
+            "verified_at": "2026-10-26T11:59:00Z",
+            "window_s": 604800
+          },
+          {
+            "burn": "none",
+            "burn_pph": null,
+            "label": "Cursor Pro · Cursor Models",
+            "note": null,
+            "on_demand": {
+              "limit": 50,
+              "spent": 61.25
+            },
+            "pace": "ahead",
+            "percent": 92,
+            "read_failed": false,
+            "renews": null,
+            "renews_at": "2026-11-10T12:00:00Z",
+            "renews_date_only": false,
+            "renews_on": null,
+            "renews_source": "live",
+            "resets_at": "2026-11-10T12:00:00Z",
+            "seat": "cursor_models",
+            "status": "live",
+            "text": "92% · ahead of pace",
+            "users": [
+
+            ],
+            "verified_at": "2026-10-26T11:59:00Z",
+            "window_s": 2592000
+          },
+          {
+            "burn": "none",
+            "burn_pph": null,
+            "label": "Cursor Pro · Other Models",
+            "note": null,
+            "on_demand": {
+              "limit": 50,
+              "spent": 61.25
+            },
+            "pace": "ahead",
+            "percent": 100,
+            "read_failed": false,
+            "renews": null,
+            "renews_at": "2026-11-10T12:00:00Z",
+            "renews_date_only": false,
+            "renews_on": null,
+            "renews_source": "live",
+            "resets_at": "2026-11-10T12:00:00Z",
+            "seat": "cursor_other",
+            "status": "live",
+            "text": "100% · ahead of pace",
+            "users": [
+
+            ],
+            "verified_at": "2026-10-26T11:59:00Z",
+            "window_s": 2592000
+          },
+          {
+            "burn": "none",
+            "burn_pph": null,
+            "exhausted": true,
+            "label": "Grok Bot · weekly",
+            "note": null,
+            "on_demand": {
+              "limit": 50,
+              "spent": 61.25
+            },
+            "pace": "",
+            "percent": 100,
+            "read_failed": false,
+            "renews": null,
+            "renews_at": "2026-11-10T12:00:00Z",
+            "renews_date_only": false,
+            "renews_on": null,
+            "renews_source": "live",
+            "resets_at": "2026-10-29T12:00:00Z",
+            "seat": "grokbot",
+            "status": "live",
+            "text": "exhausted",
+            "users": [
+
+            ],
+            "verified_at": "2026-10-26T11:59:00Z",
+            "window_s": 604800
+          },
+          {
+            "burn": "none",
+            "burn_pph": null,
+            "exhausted": true,
+            "label": "SuperGrok · weekly",
+            "note": null,
+            "pace": "",
+            "percent": 100,
+            "read_failed": false,
+            "renews": null,
+            "renews_at": null,
+            "renews_date_only": false,
+            "renews_on": null,
+            "renews_source": null,
+            "resets_at": "2026-10-30T12:00:00Z",
+            "seat": "supergrok",
+            "status": "live",
+            "text": "exhausted · 402 2.5h ago",
+            "users": [
+
+            ],
+            "verified_at": "2026-10-26T11:59:00Z",
+            "window_s": 604800
+          },
+          {
+            "burn": "none",
+            "burn_pph": null,
+            "exhausted": true,
+            "label": "Muse · weekly",
+            "note": null,
+            "pace": "",
+            "percent": 100,
+            "read_failed": false,
+            "renews": null,
+            "renews_at": null,
+            "renews_date_only": false,
+            "renews_on": null,
+            "renews_source": null,
+            "resets_at": "2026-10-29T12:00:00Z",
+            "seat": "muse",
+            "status": "live",
+            "text": "out of usage",
+            "users": [
+
+            ],
+            "verified_at": "2026-10-26T11:59:00Z",
+            "window_s": 604800
+          }
+        ]
+      },
+      "error": null,
+      "fetched_at": "2026-10-26T11:59:30Z"
+    },
+    "worktrees": {
+      "data": null,
+      "error": "no data yet",
+      "fetched_at": null
+    }
+  },
+  "profile": {
+    "brand": "Orderly test",
+    "next_up_label": "Next up",
+    "repos": [
+      "demo",
+      "garden"
+    ],
+    "search_placeholder": "Search fixtures",
+    "viewer": "tester"
+  },
+  "server_time": "2026-10-26T12:00:00Z"
+}

@@ -1,0 +1,4 @@
+{ "v": 1, "as_of": "2026-10-26T11:59:00Z", "machines": [
+  { "id": "box", "label": "Box", "link": "connected", "link_as_of": "2026-10-26T11:58:00Z", "heartbeat_last": "2026-10-26T11:58:30Z", "expected_always_on": true },
+  { "id": "laptop", "label": "Laptop", "link": "disconnected", "link_as_of": "2026-10-25T20:00:00Z", "heartbeat_last": "2026-10-25T20:00:00Z", "expected_always_on": false }
+] }

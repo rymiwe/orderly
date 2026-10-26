@@ -1,0 +1,58 @@
+{
+  "action_token": "00000000000000000000000000000000",
+  "cards": {
+    "agents": {
+      "data": null,
+      "error": "no data yet",
+      "fetched_at": null
+    },
+    "linear": {
+      "data": null,
+      "error": "no data yet",
+      "fetched_at": null
+    },
+    "machines": {
+      "data": null,
+      "error": "no data yet",
+      "fetched_at": null
+    },
+    "needs_you": {
+      "data": null,
+      "error": "no data yet",
+      "fetched_at": null,
+      "pending_keys": [
+
+      ],
+      "snoozed": 0,
+      "snoozed_keys": [
+
+      ]
+    },
+    "prs": {
+      "data": null,
+      "error": "no data yet",
+      "fetched_at": null
+    },
+    "quota": {
+      "data": null,
+      "error": "no data yet",
+      "fetched_at": null
+    },
+    "worktrees": {
+      "data": null,
+      "error": "no data yet",
+      "fetched_at": null
+    }
+  },
+  "profile": {
+    "brand": "Orderly test",
+    "next_up_label": "Next up",
+    "repos": [
+      "demo",
+      "garden"
+    ],
+    "search_placeholder": "Search fixtures",
+    "viewer": "tester"
+  },
+  "server_time": "2026-10-26T12:00:00Z"
+}
