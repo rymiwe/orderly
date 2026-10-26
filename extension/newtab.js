@@ -186,6 +186,37 @@
     return [row.id, row.title, row.detail, row.action, row.worktree].filter(Boolean).join(" ");
   }
 
+  // Same order as NEEDS_YOU_TIER_ORDER in server.rb. Empty tiers are skipped.
+  var NEED_TIERS = [
+    { id: "direct_ask", label: "Direct ask" },
+    { id: "blocked_on_me", label: "Blocked on me" },
+    { id: "team_ask", label: "Team ask" },
+    { id: "informational", label: "Informational" }
+  ];
+
+  function needTier(row) {
+    var id = row && row.tier;
+    var i;
+    for (i = 0; i < NEED_TIERS.length; i++) {
+      if (NEED_TIERS[i].id === id) return id;
+    }
+    return "informational";
+  }
+
+  // Exactly 1d, 3d, and 7d fall in the older bucket. <1d, 1-3d, 3-7d, >7d.
+  function ageBucket(then, now) {
+    var t, age, day;
+    if (!then) return "age-unknown";
+    t = Date.parse(then);
+    if (isNaN(t)) return "age-unknown";
+    age = now - t;
+    day = 86400000;
+    if (age < day) return "age-lt-1d";
+    if (age < 3 * day) return "age-1-3d";
+    if (age < 7 * day) return "age-3-7d";
+    return "age-gt-7d";
+  }
+
   function prHay(row) {
     return ["#" + row.number, String(row.number), row.title, row.repo].filter(Boolean).join(" ");
   }
@@ -491,9 +522,29 @@
     return bits;
   }
 
+  function renderNeedRow(row, now) {
+    var age = row.since ? formatAge(row.since, now) : "";
+    var bucket = ageBucket(row.since, now);
+    return el("li", null,
+      el("span", { class: "id" },
+        row.id || "",
+        row.kind === "pr" ? el("span", { class: "chip" }, "gh") : null,
+        row.kind === "linear" ? el("span", { class: "chip" }, "linear") : null,
+        row.kind === "machine" ? el("span", { class: "chip" }, "fleet") : null
+      ),
+      el("span", null,
+        row.title || "",
+        row.detail ? el("br") : null,
+        row.detail ? el("span", { class: "why" }, row.detail) : null
+      ),
+      el("span", { class: "age " + bucket }, age),
+      el("span", { class: "acts" }, needsActs(row))
+    );
+  }
+
   function renderNeeds(now) {
     var c = card("needs_you");
-    var rows, shown, headRight, i, row, why;
+    var rows, shown, headRight, kids;
     var countLabel = "Needs you";
     if (!hasData(c)) {
       needsEl.replaceChildren(
@@ -508,27 +559,23 @@
     rows = Array.isArray(c.data) ? c.data : [];
     shown = rows.filter(function (r) { return matches(needHay(r), query); });
     countLabel = "Needs you · " + shown.length;
-    headRight = "sorted by how long it has been waiting · quota last";
+    headRight = "priority, then oldest";
     if (staleBits(c).length) headRight = staleBits(c).join(" · ");
-    needsEl.replaceChildren(
+    kids = [
       el("div", { class: "head" },
         el("span", { class: "eyebrow" }, countLabel),
         el("span", { class: "note" }, headRight)
-      ),
-      el("ol", null, shown.map(function (row) {
-        why = [row.detail, row.since ? formatAge(row.since, now) : ""].filter(Boolean).join(" · ");
-        return el("li", null,
-          el("span", { class: "id" },
-            row.id || "",
-            row.kind === "pr" ? el("span", { class: "chip" }, "gh") : null,
-            row.kind === "linear" ? el("span", { class: "chip" }, "linear") : null,
-            row.kind === "machine" ? el("span", { class: "chip" }, "fleet") : null
-          ),
-          el("span", null, row.title || "", el("br"), el("span", { class: "why" }, why)),
-          el("span", { class: "acts" }, needsActs(row))
-        );
-      }))
-    );
+      )
+    ];
+    NEED_TIERS.forEach(function (tier) {
+      var group = shown.filter(function (r) { return needTier(r) === tier.id; });
+      if (!group.length) return;
+      kids.push(el("div", { class: "tier", "data-tier": tier.id },
+        el("div", { class: "group" }, tier.label + " · " + group.length),
+        el("ol", null, group.map(function (row) { return renderNeedRow(row, now); }))
+      ));
+    });
+    needsEl.replaceChildren.apply(needsEl, kids);
   }
 
   function renderWorktrees() {

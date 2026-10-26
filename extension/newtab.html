@@ -54,8 +54,11 @@ code,.mono{font-family:var(--mono);font-size:12.5px}
 .needs{padding:12px 14px;border-bottom:1px solid var(--line);background:color-mix(in oklab,var(--accent) 7%,var(--panel))}
 .needs .head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
 .needs .head .eyebrow{color:var(--accent)}
+.needs .tier{margin-top:12px}
+.needs .tier:first-child{margin-top:0}
+.needs .tier .group{margin:0 0 2px}
 .needs ol{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:6px 18px}
-.needs li{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:8px;align-items:baseline;padding:5px 0;border-top:1px solid var(--line);color:var(--ink);min-width:0}
+.needs li{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:8px;align-items:baseline;padding:5px 0;border-top:1px solid var(--line);color:var(--ink);min-width:0}
 .needs li>span:nth-child(2){overflow-wrap:anywhere}
 .needs li:nth-child(-n+3){border-top:0}
 .needs .why{font-size:12px;color:var(--ink-2)}
@@ -63,6 +66,12 @@ code,.mono{font-family:var(--mono);font-size:12.5px}
 .needs .id .chip{margin-left:6px;vertical-align:middle}
 .needs .acts{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end;align-items:center}
 .needs button.chip.inert{cursor:default;color:var(--muted)}
+.needs .age{display:inline-block;font-size:10.5px;letter-spacing:.02em;padding:0 6px;border:1px solid var(--line-strong);border-radius:3px;text-align:center;line-height:1.6}
+.needs .age-lt-1d{color:var(--good);border-color:color-mix(in srgb, var(--good) 60%, var(--line))}
+.needs .age-1-3d{color:var(--warn);border-color:color-mix(in srgb, var(--warn) 60%, var(--line))}
+.needs .age-3-7d{color:var(--serious);border-color:color-mix(in srgb, var(--serious) 60%, var(--line))}
+.needs .age-gt-7d{color:var(--crit);border-color:color-mix(in srgb, var(--crit) 60%, var(--line))}
+.needs .age-unknown{color:var(--muted)}
 
 .cols{display:grid;grid-template-columns:1.2fr 1.15fr .95fr;gap:0}
 .col{padding:12px 14px;border-right:1px solid var(--line);min-width:0}
