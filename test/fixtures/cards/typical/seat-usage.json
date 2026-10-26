@@ -1,0 +1,14 @@
+{
+  "v": 1, "ts": 1793015940,
+  "as_of": { "claude": 1793015940, "chatgpt": 1793015940, "cursor": 1793015940, "grokbot": 1793015940, "grok": 1793015940, "muse": 1793015940 },
+  "claude_plan": "max_20x", "claude_max": true,
+  "claude_week": 41, "claude_week_pace": "on", "claude_week_reset_ts": 1793275200,
+  "claude_5h": 12, "claude_5h_reset_ts": 1793026800,
+  "fable": 30, "fable_pace": "under", "fable_reset_ts": 1793275200,
+  "codex": 22, "codex_pace": "under", "codex_reset_ts": 1793361600, "codex_window_s": 604800, "codex_plan": "pro",
+  "cursor": "Ultra", "cursor_auto_pct": 35, "cursor_auto_pace": "on", "cursor_api_pct": 12, "cursor_api_pace": "under",
+  "cursor_reset_ts": 1794312000, "cursor_window_s": 2592000, "cursor_ondemand": 4.5, "cursor_ondemand_limit": 50,
+  "bot_pct": 48, "bot_pace": "on", "bot_reset_ts": 1793275200, "bot_window_s": 604800, "bot_exhausted": false,
+  "grok_pct": 18, "grok_pace": "under", "grok_reset_ts": 1793361600, "grok_window_s": 604800, "grok_exhausted": false,
+  "muse_week": 25, "muse_week_reset_ts": 1793361600, "muse_5h": 5, "muse_5h_reset_ts": 1793026800
+}

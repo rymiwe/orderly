@@ -1,0 +1,14 @@
+{
+  "brand": "Orderly test",
+  "viewer": "tester",
+  "search_placeholder": "Search fixtures",
+  "next_up_label": "Next up",
+  "github_org": "example",
+  "repos": [
+    { "name": "demo", "root": "~/src/demo", "db_port": 5433 },
+    { "name": "garden", "root": "~/src/garden" }
+  ],
+  "personal_repos": ["demo", "garden"],
+  "waiting_states": ["Waiting"],
+  "fleet_expected": [{ "id": "box", "label": "Box" }, { "id": "laptop", "label": "Laptop" }]
+}

@@ -1,0 +1,44 @@
+{
+  "fetched_at": "2026-10-26T11:59:30Z",
+  "host_suggestion": null,
+  "local": {
+    "rows": [
+      { "name": "demo", "path": "@HOME@/src/demo", "repo": "demo", "branch": "main", "head": "1111111111111111111111111111111111111111", "detached": false, "is_main": true, "app_port": null, "db_port": 5433, "overmind_live": false, "merged_into_develop": false, "last_session_at": "2026-10-26T11:00:00Z" },
+      { "name": "demo-feature-a", "path": "@HOME@/src/demo/.wt/demo-feature-a", "repo": "demo", "branch": "feature-a", "head": "2222222222222222222222222222222222222222", "detached": false, "is_main": false, "app_port": 3001, "db_port": 5433, "overmind_live": true, "merged_into_develop": false, "last_session_at": "2026-10-26T11:55:00Z" },
+      { "name": "demo-ab-7-old", "path": "@HOME@/src/demo/.wt/demo-ab-7-old", "repo": "demo", "branch": "ab-7-old", "head": "3333333333333333333333333333333333333333", "detached": false, "is_main": false, "app_port": null, "db_port": 5433, "overmind_live": false, "merged_into_develop": true, "last_session_at": "2026-09-20T10:00:00Z" },
+      { "name": "garden", "path": "@HOME@/src/garden", "repo": "garden", "branch": "main", "head": "4444444444444444444444444444444444444444", "detached": false, "is_main": true, "app_port": null, "db_port": null, "overmind_live": false, "merged_into_develop": false, "last_session_at": null }
+    ],
+    "sessions": [
+      { "tool": "claude", "id": "sess-claude-1", "cwd": "@HOME@/src/demo/.wt/demo-feature-a", "worktree": "demo-feature-a", "state": "working", "detail": "Edit server.rb", "name": "feature a", "pid": 101, "alive": true, "started_at": "2026-10-26T11:30:00Z", "updated_at": "2026-10-26T11:59:00Z", "resume_command": null },
+      { "tool": "codex", "id": "sess-codex-1", "cwd": "@HOME@/src/garden", "worktree": "garden", "state": "waiting", "detail": "approve command", "name": null, "pid": 102, "alive": true, "started_at": "2026-10-26T10:00:00Z", "updated_at": "2026-10-26T11:20:00Z", "resume_command": "codex resume sess-codex-1" }
+    ]
+  },
+  "pings": { "3001": [{ "path": "/login", "status": 200, "ms": 12 }] },
+  "pr_maps": {
+    "demo": {
+      "by_branch": { "feature-a": { "number": 21, "state": "OPEN", "draft": false, "url": "https://github.com/example/demo/pull/21" } },
+      "by_number": { "21": { "number": 21, "state": "OPEN", "draft": false, "url": "https://github.com/example/demo/pull/21" } }
+    }
+  },
+  "prs": {
+    "mine": [
+      { "number": 21, "repo": "demo", "name_with_owner": "example/demo", "title": "Feature A", "url": "https://github.com/example/demo/pull/21", "draft": false, "author": "tester", "ci": "pass", "ci_url": null, "ci_failed_name": null, "ci_failed_at": null, "review_decision": "REVIEW_REQUIRED", "threads_open": 1, "threads_awaiting_me": 1, "threads_last_by": "sam", "thread_comment_url": "https://github.com/example/demo/pull/21#discussion_r1", "thread_comment_at": "2026-10-25T18:00:00Z", "reviews": 1, "requested_reviewers": ["sam"], "changes_requested_by": null, "changes_requested_at": null, "created_at": "2026-10-20T09:00:00Z", "updated_at": "2026-10-26T09:00:00Z" },
+      { "number": 22, "repo": "garden", "name_with_owner": "example/garden", "title": "Fix the build", "url": "https://github.com/example/garden/pull/22", "draft": false, "author": "tester", "ci": "fail", "ci_url": "https://github.com/example/garden/actions/runs/9", "ci_failed_name": "test", "ci_failed_at": "2026-10-26T08:00:00Z", "review_decision": null, "threads_open": 0, "threads_awaiting_me": 0, "threads_last_by": null, "thread_comment_url": null, "thread_comment_at": null, "reviews": 0, "requested_reviewers": [], "changes_requested_by": null, "changes_requested_at": null, "created_at": "2026-10-24T09:00:00Z", "updated_at": "2026-10-26T08:00:00Z" }
+    ],
+    "review_requested": [
+      { "number": 30, "repo": "demo", "name_with_owner": "example/demo", "title": "Please review the cache", "url": "https://github.com/example/demo/pull/30", "draft": false, "author": "sam", "requested_by": "sam", "requested_at": "2026-10-25T12:00:00Z", "since": "2026-10-25T12:00:00Z", "ci": "pass", "review_decision": null, "threads_open": 0, "threads_awaiting_me": 0, "reviews": 0, "requested_reviewers": ["tester"], "created_at": "2026-10-25T11:00:00Z", "updated_at": "2026-10-25T12:00:00Z" }
+    ],
+    "review_requested_team": [],
+    "team_ask_candidates": [],
+    "counts": { "mine": 2, "review_requested": 1, "review_requested_team": 0, "review_requested_raw": 1, "team_ask_candidates": 0 }
+  },
+  "linear": {
+    "mine": [
+      { "id": "AB-7", "title": "Old cleanup", "url": "https://linear.app/example/issue/AB-7", "team": "AB", "state": "Done", "state_type": "completed", "priority": 3, "labels": [], "last_comment_by": null, "last_comment_at": null, "last_comment_mine": false, "last_comment_excerpt": null, "updated_at": "2026-10-20T10:00:00Z" },
+      { "id": "AB-9", "title": "Answer the vendor", "url": "https://linear.app/example/issue/AB-9", "team": "AB", "state": "Waiting", "state_type": "started", "priority": 2, "labels": ["Next up"], "last_comment_by": "Sam", "last_comment_at": "2026-10-24T15:00:00Z", "last_comment_mine": false, "last_comment_excerpt": "Any update?", "updated_at": "2026-10-24T15:00:00Z" }
+    ],
+    "mentions": [
+      { "issue_id": "AB-9", "actor": "Sam", "kind": "mention", "excerpt": "@tester can you check?", "at": "2026-10-26T07:00:00Z", "comment_url": "https://linear.app/example/issue/AB-9#comment-1" }
+    ]
+  }
+}

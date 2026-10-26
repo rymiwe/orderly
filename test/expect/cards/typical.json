@@ -1,0 +1,794 @@
+{
+  "action_token": "00000000000000000000000000000000",
+  "cards": {
+    "agents": {
+      "data": {
+        "counts": {
+          "claude": 1,
+          "codex_today": 1,
+          "grok": 0
+        },
+        "sessions": [
+          {
+            "alive": true,
+            "cwd": "$HOME/src/demo/.wt/demo-feature-a",
+            "detail": "Edit server.rb",
+            "id": "sess-claude-1",
+            "name": "feature a",
+            "pid": 101,
+            "resume_command": null,
+            "started_at": "2026-10-26T11:30:00Z",
+            "state": "working",
+            "tool": "claude",
+            "updated_at": "2026-10-26T11:59:00Z",
+            "worktree": "demo-feature-a"
+          },
+          {
+            "alive": true,
+            "cwd": "$HOME/src/garden",
+            "detail": "approve command",
+            "id": "sess-codex-1",
+            "name": null,
+            "pid": 102,
+            "resume_command": "codex resume sess-codex-1",
+            "started_at": "2026-10-26T10:00:00Z",
+            "state": "waiting",
+            "tool": "codex",
+            "updated_at": "2026-10-26T11:20:00Z",
+            "worktree": "garden"
+          }
+        ]
+      },
+      "error": null,
+      "fetched_at": "2026-10-26T11:59:30Z"
+    },
+    "linear": {
+      "data": {
+        "counts": {
+          "in_progress": 1,
+          "mentions": 1,
+          "mine": 2,
+          "next_up": 0,
+          "waiting": 0
+        },
+        "mentions": [
+          {
+            "actor": "Sam",
+            "at": "2026-10-26T07:00:00Z",
+            "comment_url": "https://linear.app/example/issue/AB-9#comment-1",
+            "excerpt": "@tester can you check?",
+            "issue_id": "AB-9",
+            "kind": "mention"
+          }
+        ],
+        "mine": [
+          {
+            "agent": null,
+            "group": "other",
+            "id": "AB-7",
+            "labels": [
+
+            ],
+            "last_comment_at": null,
+            "last_comment_by": null,
+            "last_comment_excerpt": null,
+            "last_comment_mine": false,
+            "priority": 3,
+            "since": "2026-10-20T10:00:00Z",
+            "state": "Done",
+            "state_type": "completed",
+            "team": "AB",
+            "title": "Old cleanup",
+            "updated_at": "2026-10-20T10:00:00Z",
+            "url": "https://linear.app/example/issue/AB-7",
+            "worktrees": [
+              "demo-ab-7-old"
+            ]
+          },
+          {
+            "agent": null,
+            "group": "in_progress",
+            "id": "AB-9",
+            "labels": [
+              "Next up"
+            ],
+            "last_comment_at": "2026-10-24T15:00:00Z",
+            "last_comment_by": "Sam",
+            "last_comment_excerpt": "Any update?",
+            "last_comment_mine": false,
+            "priority": 2,
+            "since": "2026-10-24T15:00:00Z",
+            "state": "Waiting",
+            "state_type": "started",
+            "team": "AB",
+            "title": "Answer the vendor",
+            "updated_at": "2026-10-24T15:00:00Z",
+            "url": "https://linear.app/example/issue/AB-9",
+            "worktrees": [
+
+            ]
+          }
+        ]
+      },
+      "error": null,
+      "fetched_at": "2026-10-26T11:59:30Z"
+    },
+    "machines": {
+      "data": {
+        "cache_as_of": "2026-10-26T11:59:00Z",
+        "cache_present": true,
+        "machines": [
+          {
+            "expected_always_on": true,
+            "heartbeat": "live",
+            "heartbeat_age_s": 90,
+            "heartbeat_last": "2026-10-26T11:58:30Z",
+            "id": "box",
+            "label": "Box",
+            "link": "connected",
+            "link_as_of": "2026-10-26T11:58:00Z",
+            "note": null
+          },
+          {
+            "expected_always_on": true,
+            "heartbeat": "dead",
+            "heartbeat_age_s": 57600,
+            "heartbeat_last": "2026-10-25T20:00:00Z",
+            "id": "laptop",
+            "label": "Laptop",
+            "link": "unknown",
+            "link_as_of": "2026-10-25T20:00:00Z",
+            "note": null
+          }
+        ]
+      },
+      "error": null,
+      "fetched_at": "2026-10-26T11:59:30Z"
+    },
+    "needs_you": {
+      "data": [
+        {
+          "action": "review",
+          "action_url": "https://github.com/example/demo/pull/30",
+          "actions": [
+            {
+              "id": "council",
+              "label": "council"
+            },
+            {
+              "id": "draft",
+              "label": "draft"
+            }
+          ],
+          "ask_from": "direct",
+          "change_token": "updated:2026-10-25T12:00:00Z",
+          "clear_key": "github:example/demo#30:review",
+          "detail": "Please review the cache",
+          "dim": false,
+          "expires_from": "2026-10-25T12:00:00Z",
+          "id": "#30",
+          "item_title": "Please review the cache",
+          "kind": "pr",
+          "lane": "personal",
+          "path": null,
+          "reason": "review_request",
+          "repo": "example/demo",
+          "row_key": "pr:example/demo:#30:review_requested",
+          "since": "2026-10-25T12:00:00Z",
+          "source": "github",
+          "subkind": "review_requested",
+          "tier": "direct_ask",
+          "title": "sam asked for your review",
+          "url": "https://github.com/example/demo/pull/30",
+          "worktree": null
+        },
+        {
+          "action": "reply",
+          "action_url": "https://github.com/example/demo/pull/21#discussion_r1",
+          "actions": [
+            {
+              "id": "draft",
+              "label": "draft"
+            }
+          ],
+          "ask_from": null,
+          "change_token": "https://github.com/example/demo/pull/21#discussion_r1",
+          "clear_key": "github:example/demo#21:threads",
+          "detail": "Feature A",
+          "dim": false,
+          "id": "#21",
+          "item_title": "Feature A",
+          "kind": "pr",
+          "lane": "personal",
+          "path": "$HOME/src/demo/.wt/demo-feature-a",
+          "reason": "review_thread",
+          "repo": "example/demo",
+          "row_key": "pr:example/demo:#21:threads",
+          "since": "2026-10-25T18:00:00Z",
+          "source": "github",
+          "subkind": "threads",
+          "tier": "direct_ask",
+          "title": "1 review thread from sam with no reply",
+          "url": "https://github.com/example/demo/pull/21",
+          "worktree": "demo-feature-a"
+        },
+        {
+          "action": "reply",
+          "action_url": "https://linear.app/example/issue/AB-9#comment-1",
+          "actions": [
+
+          ],
+          "ask_from": null,
+          "change_token": "https://linear.app/example/issue/AB-9#comment-1",
+          "clear_key": "linear:AB-9:mention",
+          "detail": "@tester can you check?",
+          "dim": false,
+          "id": "AB-9",
+          "item_title": null,
+          "kind": "linear",
+          "lane": "unknown",
+          "path": null,
+          "reason": "linear_mention",
+          "repo": "AB",
+          "row_key": "linear:AB:AB-9:mention",
+          "since": "2026-10-26T07:00:00Z",
+          "source": "linear",
+          "subkind": "mention",
+          "tier": "direct_ask",
+          "title": "Sam mentioned you in AB-9",
+          "url": "https://linear.app/example/issue/AB-9#comment-1",
+          "worktree": null
+        },
+        {
+          "action": "logs",
+          "action_url": "https://github.com/example/garden/actions/runs/9",
+          "actions": [
+            {
+              "id": "loop",
+              "label": "loop"
+            }
+          ],
+          "ask_from": null,
+          "change_token": "check:test|at:2026-10-26T08:00:00Z",
+          "clear_key": "github:example/garden#22:ci",
+          "detail": "test · Fix the build",
+          "dim": false,
+          "id": "#22",
+          "item_title": "Fix the build",
+          "kind": "pr",
+          "lane": "personal",
+          "path": null,
+          "reason": "ci_failed",
+          "repo": "example/garden",
+          "row_key": "pr:example/garden:#22:ci_fail",
+          "since": "2026-10-26T08:00:00Z",
+          "source": "github",
+          "subkind": "ci_fail",
+          "tier": "blocked_on_me",
+          "title": "CI failed on the last push",
+          "url": "https://github.com/example/garden/pull/22",
+          "worktree": null
+        },
+        {
+          "action": "Grok Bot",
+          "actions": [
+
+          ],
+          "ask_from": null,
+          "change_token": "dead",
+          "clear_key": "machine:laptop:heartbeat",
+          "detail": "Host heartbeat is 12m or older, and the bot link is unknown",
+          "dim": false,
+          "id": "Laptop",
+          "kind": "machine",
+          "reason": "machine_heartbeat",
+          "row_key": "machine:Laptop:Laptop:link",
+          "since": "2026-10-25T20:00:00Z",
+          "source": "machine",
+          "subkind": "link",
+          "tier": "informational",
+          "title": "Laptop heartbeat stale, bot link unknown",
+          "worktree": null
+        }
+      ],
+      "error": null,
+      "fetched_at": "2026-10-26T11:59:30Z",
+      "pending_keys": [
+
+      ],
+      "snoozed": 0,
+      "snoozed_keys": [
+
+      ]
+    },
+    "prs": {
+      "data": {
+        "counts": {
+          "mine": 2,
+          "review_requested": 1,
+          "review_requested_raw": 1,
+          "review_requested_team": 0,
+          "team_ask_candidates": 0
+        },
+        "mine": [
+          {
+            "author": "tester",
+            "changes_requested_at": null,
+            "changes_requested_by": null,
+            "ci": "pass",
+            "ci_failed_at": null,
+            "ci_failed_name": null,
+            "ci_url": null,
+            "created_at": "2026-10-20T09:00:00Z",
+            "draft": false,
+            "name_with_owner": "example/demo",
+            "number": 21,
+            "repo": "demo",
+            "requested_reviewers": [
+              "sam"
+            ],
+            "review_decision": "REVIEW_REQUIRED",
+            "reviews": 1,
+            "thread_comment_at": "2026-10-25T18:00:00Z",
+            "thread_comment_url": "https://github.com/example/demo/pull/21#discussion_r1",
+            "threads_awaiting_me": 1,
+            "threads_last_by": "sam",
+            "threads_open": 1,
+            "title": "Feature A",
+            "updated_at": "2026-10-26T09:00:00Z",
+            "url": "https://github.com/example/demo/pull/21"
+          },
+          {
+            "author": "tester",
+            "changes_requested_at": null,
+            "changes_requested_by": null,
+            "ci": "fail",
+            "ci_failed_at": "2026-10-26T08:00:00Z",
+            "ci_failed_name": "test",
+            "ci_url": "https://github.com/example/garden/actions/runs/9",
+            "created_at": "2026-10-24T09:00:00Z",
+            "draft": false,
+            "name_with_owner": "example/garden",
+            "number": 22,
+            "repo": "garden",
+            "requested_reviewers": [
+
+            ],
+            "review_decision": null,
+            "reviews": 0,
+            "thread_comment_at": null,
+            "thread_comment_url": null,
+            "threads_awaiting_me": 0,
+            "threads_last_by": null,
+            "threads_open": 0,
+            "title": "Fix the build",
+            "updated_at": "2026-10-26T08:00:00Z",
+            "url": "https://github.com/example/garden/pull/22"
+          }
+        ],
+        "review_requested": [
+          {
+            "author": "sam",
+            "ci": "pass",
+            "created_at": "2026-10-25T11:00:00Z",
+            "draft": false,
+            "name_with_owner": "example/demo",
+            "number": 30,
+            "repo": "demo",
+            "requested_at": "2026-10-25T12:00:00Z",
+            "requested_by": "sam",
+            "requested_reviewers": [
+              "tester"
+            ],
+            "review_decision": null,
+            "reviews": 0,
+            "since": "2026-10-25T12:00:00Z",
+            "threads_awaiting_me": 0,
+            "threads_open": 0,
+            "title": "Please review the cache",
+            "updated_at": "2026-10-25T12:00:00Z",
+            "url": "https://github.com/example/demo/pull/30"
+          }
+        ],
+        "review_requested_team": [
+
+        ],
+        "team_ask_candidates": [
+
+        ]
+      },
+      "error": null,
+      "fetched_at": "2026-10-26T11:59:30Z"
+    },
+    "quota": {
+      "data": {
+        "host_suggestion": null,
+        "seats": [
+          {
+            "burn": "strong",
+            "burn_pph": 1.5,
+            "five_hour": {
+              "percent": 12,
+              "resets_at": "2026-10-26T15:00:00Z",
+              "window_s": 18000
+            },
+            "label": "Claude Max · weekly",
+            "note": null,
+            "pace": "on",
+            "percent": 41,
+            "plan": "max_20x",
+            "read_failed": false,
+            "renews": null,
+            "renews_at": null,
+            "renews_date_only": false,
+            "renews_on": null,
+            "renews_source": null,
+            "resets_at": "2026-10-29T12:00:00Z",
+            "seat": "claude_weekly",
+            "status": "live",
+            "text": "41% · 5h 12% · on pace",
+            "users": [
+              {
+                "label": "Claude Code",
+                "machine": "testhost",
+                "started_at": "2026-10-26T11:30:00Z"
+              }
+            ],
+            "verified_at": "2026-10-26T11:59:00Z",
+            "window_s": 604800
+          },
+          {
+            "burn": "none",
+            "burn_pph": null,
+            "label": "Claude Max · Fable slice",
+            "note": null,
+            "pace": "under",
+            "percent": 30,
+            "plan": "max_20x",
+            "read_failed": false,
+            "renews": null,
+            "renews_at": null,
+            "renews_date_only": false,
+            "renews_on": null,
+            "renews_source": null,
+            "resets_at": "2026-10-29T12:00:00Z",
+            "seat": "claude_fable",
+            "status": "live",
+            "text": "30% · under pace",
+            "users": [
+
+            ],
+            "verified_at": "2026-10-26T11:59:00Z",
+            "window_s": 604800
+          },
+          {
+            "burn": "none",
+            "burn_pph": null,
+            "five_hour": null,
+            "label": "Codex · weekly",
+            "note": "pro",
+            "pace": "under",
+            "percent": 22,
+            "plan": "pro",
+            "read_failed": false,
+            "renews": null,
+            "renews_at": null,
+            "renews_date_only": false,
+            "renews_on": null,
+            "renews_source": null,
+            "resets_at": "2026-10-30T12:00:00Z",
+            "seat": "codex",
+            "status": "live",
+            "text": "22% · under pace",
+            "users": [
+
+            ],
+            "verified_at": "2026-10-26T11:59:00Z",
+            "window_s": 604800
+          },
+          {
+            "burn": "none",
+            "burn_pph": null,
+            "label": "Cursor Ultra · Cursor Models",
+            "note": null,
+            "on_demand": {
+              "limit": 50,
+              "spent": 4.5
+            },
+            "pace": "on",
+            "percent": 35,
+            "read_failed": false,
+            "renews": null,
+            "renews_at": "2026-11-10T12:00:00Z",
+            "renews_date_only": false,
+            "renews_on": null,
+            "renews_source": "live",
+            "resets_at": "2026-11-10T12:00:00Z",
+            "seat": "cursor_models",
+            "status": "live",
+            "text": "35% · on pace",
+            "users": [
+
+            ],
+            "verified_at": "2026-10-26T11:59:00Z",
+            "window_s": 2592000
+          },
+          {
+            "burn": "none",
+            "burn_pph": null,
+            "label": "Cursor Ultra · Other Models",
+            "note": null,
+            "on_demand": {
+              "limit": 50,
+              "spent": 4.5
+            },
+            "pace": "under",
+            "percent": 12,
+            "read_failed": false,
+            "renews": null,
+            "renews_at": "2026-11-10T12:00:00Z",
+            "renews_date_only": false,
+            "renews_on": null,
+            "renews_source": "live",
+            "resets_at": "2026-11-10T12:00:00Z",
+            "seat": "cursor_other",
+            "status": "live",
+            "text": "12% · under pace",
+            "users": [
+
+            ],
+            "verified_at": "2026-10-26T11:59:00Z",
+            "window_s": 2592000
+          },
+          {
+            "burn": "none",
+            "burn_pph": null,
+            "label": "Grok Bot · weekly",
+            "note": null,
+            "on_demand": {
+              "limit": 50,
+              "spent": 4.5
+            },
+            "pace": "on",
+            "percent": 48,
+            "read_failed": false,
+            "renews": null,
+            "renews_at": "2026-11-10T12:00:00Z",
+            "renews_date_only": false,
+            "renews_on": null,
+            "renews_source": "live",
+            "resets_at": "2026-10-29T12:00:00Z",
+            "seat": "grokbot",
+            "status": "live",
+            "text": "48% · on pace",
+            "users": [
+
+            ],
+            "verified_at": "2026-10-26T11:59:00Z",
+            "window_s": 604800
+          },
+          {
+            "burn": "none",
+            "burn_pph": null,
+            "label": "SuperGrok · weekly",
+            "note": null,
+            "pace": "under",
+            "percent": 18,
+            "read_failed": false,
+            "renews": null,
+            "renews_at": null,
+            "renews_date_only": false,
+            "renews_on": null,
+            "renews_source": null,
+            "resets_at": "2026-10-30T12:00:00Z",
+            "seat": "supergrok",
+            "status": "live",
+            "text": "18% · under pace",
+            "users": [
+
+            ],
+            "verified_at": "2026-10-26T11:59:00Z",
+            "window_s": 604800
+          },
+          {
+            "burn": "none",
+            "burn_pph": null,
+            "five_hour": {
+              "percent": 5,
+              "resets_at": "2026-10-26T15:00:00Z",
+              "window_s": 18000
+            },
+            "label": "Muse · weekly",
+            "note": null,
+            "pace": "",
+            "percent": 25,
+            "read_failed": false,
+            "renews": null,
+            "renews_at": null,
+            "renews_date_only": false,
+            "renews_on": null,
+            "renews_source": null,
+            "resets_at": "2026-10-30T12:00:00Z",
+            "seat": "muse",
+            "status": "live",
+            "text": "25% · 5h 5%",
+            "users": [
+
+            ],
+            "verified_at": "2026-10-26T11:59:00Z",
+            "window_s": 604800
+          }
+        ]
+      },
+      "error": null,
+      "fetched_at": "2026-10-26T11:59:30Z"
+    },
+    "worktrees": {
+      "data": {
+        "counts": {
+          "prunable": 1,
+          "sessions": 2,
+          "worktrees": 4
+        },
+        "repos": [
+          {
+            "db_port": 5433,
+            "name": "demo",
+            "root": "$HOME/src/demo"
+          },
+          {
+            "db_port": null,
+            "name": "garden",
+            "root": "$HOME/src/garden"
+          }
+        ],
+        "rows": [
+          {
+            "agents": [
+
+            ],
+            "app_port": null,
+            "branch": "main",
+            "db_port": 5433,
+            "detached": false,
+            "head": "1111111111111111111111111111111111111111",
+            "is_main": true,
+            "last_session_at": "2026-10-26T11:00:00Z",
+            "merged_into_develop": false,
+            "name": "demo",
+            "overmind_live": false,
+            "path": "$HOME/src/demo",
+            "pings": [
+
+            ],
+            "pr": null,
+            "prunable": false,
+            "prune_command": null,
+            "prune_reason": null,
+            "repo": "demo"
+          },
+          {
+            "agents": [
+              {
+                "alive": true,
+                "cwd": "$HOME/src/demo/.wt/demo-feature-a",
+                "detail": "Edit server.rb",
+                "id": "sess-claude-1",
+                "name": "feature a",
+                "pid": 101,
+                "resume_command": null,
+                "started_at": "2026-10-26T11:30:00Z",
+                "state": "working",
+                "tool": "claude",
+                "updated_at": "2026-10-26T11:59:00Z",
+                "worktree": "demo-feature-a"
+              }
+            ],
+            "app_port": 3001,
+            "branch": "feature-a",
+            "db_port": 5433,
+            "detached": false,
+            "head": "2222222222222222222222222222222222222222",
+            "is_main": false,
+            "last_session_at": "2026-10-26T11:55:00Z",
+            "merged_into_develop": false,
+            "name": "demo-feature-a",
+            "overmind_live": true,
+            "path": "$HOME/src/demo/.wt/demo-feature-a",
+            "pings": [
+              {
+                "ms": 12,
+                "path": "/login",
+                "status": 200
+              }
+            ],
+            "pr": {
+              "draft": false,
+              "number": 21,
+              "state": "OPEN",
+              "url": "https://github.com/example/demo/pull/21"
+            },
+            "prunable": false,
+            "prune_command": null,
+            "prune_reason": null,
+            "repo": "demo"
+          },
+          {
+            "agents": [
+
+            ],
+            "app_port": null,
+            "branch": "ab-7-old",
+            "db_port": 5433,
+            "detached": false,
+            "head": "3333333333333333333333333333333333333333",
+            "is_main": false,
+            "last_session_at": "2026-09-20T10:00:00Z",
+            "merged_into_develop": true,
+            "name": "demo-ab-7-old",
+            "overmind_live": false,
+            "path": "$HOME/src/demo/.wt/demo-ab-7-old",
+            "pings": [
+
+            ],
+            "pr": null,
+            "prunable": true,
+            "prune_command": "git -C $HOME/src/demo worktree remove $HOME/src/demo/.wt/demo-ab-7-old",
+            "prune_reason": "branch merged",
+            "repo": "demo"
+          },
+          {
+            "agents": [
+              {
+                "alive": true,
+                "cwd": "$HOME/src/garden",
+                "detail": "approve command",
+                "id": "sess-codex-1",
+                "name": null,
+                "pid": 102,
+                "resume_command": "codex resume sess-codex-1",
+                "started_at": "2026-10-26T10:00:00Z",
+                "state": "waiting",
+                "tool": "codex",
+                "updated_at": "2026-10-26T11:20:00Z",
+                "worktree": "garden"
+              }
+            ],
+            "app_port": null,
+            "branch": "main",
+            "db_port": null,
+            "detached": false,
+            "head": "4444444444444444444444444444444444444444",
+            "is_main": true,
+            "last_session_at": null,
+            "merged_into_develop": false,
+            "name": "garden",
+            "overmind_live": false,
+            "path": "$HOME/src/garden",
+            "pings": [
+
+            ],
+            "pr": null,
+            "prunable": false,
+            "prune_command": null,
+            "prune_reason": null,
+            "repo": "garden"
+          }
+        ]
+      },
+      "error": null,
+      "fetched_at": "2026-10-26T11:59:30Z"
+    }
+  },
+  "profile": {
+    "brand": "Orderly test",
+    "next_up_label": "Next up",
+    "repos": [
+      "demo",
+      "garden"
+    ],
+    "search_placeholder": "Search fixtures",
+    "viewer": "tester"
+  },
+  "server_time": "2026-10-26T12:00:00Z"
+}
