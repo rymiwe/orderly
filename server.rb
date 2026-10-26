@@ -10,6 +10,7 @@ require "net/http"
 require "open3"
 require "securerandom"
 require "shellwords"
+require "socket"
 require "time"
 require "uri"
 require "webrick"
@@ -127,11 +128,13 @@ HISTORY_TAIL_BYTES = 131_072
 BURN_MOVED_S = 30 * 60
 BURN_PACE_S = 2 * 3600
 BURN_STALE_S = 20 * 60
-# Active local sessions name the pool they draw. The grok CLI builds on SuperGrok.
-DRIVER_TOOLS = {
-  "claude" => ["Claude Code", "Claude"],
-  "codex" => ["Codex", "Codex"],
-  "grok" => ["Grok CLI", "SuperGrok"]
+# Active local sessions name the seat they draw. The session scan has no model,
+# so the tool is the whole guess: Claude Code on the weekly pool, Codex on
+# Codex, and the grok CLI on SuperGrok. The second field is the seat id.
+SEAT_TOOLS = {
+  "claude" => ["Claude Code", "claude_weekly"],
+  "codex" => ["Codex", "codex"],
+  "grok" => ["Grok CLI", "supergrok"]
 }.freeze
 # Machine availability is a different cache from seat-usage. grokbot in the
 # quota card stays the Bot's weekly allowance. Link state is never inferred
@@ -2303,16 +2306,76 @@ class OpsTabServer
     (a - b).abs <= 3600
   end
 
-  # One line per local tool with a working session, for the quota card's
-  # running-now list. Labels and pools only: no paths, worktrees, or ids.
-  def burn_drivers(sessions)
-    working = (sessions || []).select { |s| s.is_a?(Hash) && s["state"] == "working" }
-    DRIVER_TOOLS.filter_map do |tool, (label, pool)|
-      n = working.count { |s| s["tool"] == tool }
-      next if n.zero?
-
-      { "label" => label, "pool" => pool, "sessions" => n }
+  # One user per working local session, attached to that tool's seat. A cwd
+  # inside a conclave chair or council directory replaces the tool label with
+  # the directory's basename. The card gets label, machine, and started_at:
+  # no cwd, session id, worktree, or rate.
+  def users_by_seat(sessions)
+    machine = host_short_name
+    grouped = Hash.new { |h, k| h[k] = [] }
+    Array(sessions).each do |session|
+      seat, user = session_user(session, machine)
+      grouped[seat] << user if seat
     end
+    grouped
+  end
+
+  def session_user(session, machine)
+    return nil unless session.is_a?(Hash) && session["state"] == "working"
+
+    tool = SEAT_TOOLS[session["tool"]]
+    return nil unless tool
+
+    label, seat = tool
+    place = conclave_place(session["cwd"])
+    label = place if place
+    user = { "label" => label }
+    user["machine"] = machine unless machine.nil? || machine.empty?
+    started = session["started_at"]
+    user["started_at"] = started if started.is_a?(String) && started.match?(/\A\d{4}-\d{2}-\d{2}T/)
+    [seat, user]
+  end
+
+  # /workspace/conclave and ~/code/conclave, then tmp/chairs/<id> or
+  # tmp/council/<id>. A subdirectory still names the chair or council, and
+  # the basename is the only part that leaves this method.
+  def conclave_place(cwd)
+    path = expand_cwd(cwd)
+    return nil if path.nil? || path.empty?
+
+    [File.expand_path("/workspace/conclave"), File.join(HOME, "code/conclave")].each do |root|
+      chair = File.join(root, "tmp/chairs")
+      if under?(chair, path)
+        return place_label("Chair", path.delete_prefix("#{chair}/").split("/", 2).first)
+      end
+
+      council = File.join(root, "tmp/council")
+      if under?(council, path)
+        return place_label("Council", path.delete_prefix("#{council}/").split("/", 2).first)
+      end
+    end
+    nil
+  end
+
+  def place_label(kind, id)
+    return nil unless id.is_a?(String) && id.match?(/\A[A-Za-z0-9][A-Za-z0-9._-]{0,120}\z/)
+
+    "#{kind}: #{id}"
+  end
+
+  def expand_cwd(cwd)
+    return nil if cwd.nil?
+
+    s = cwd.to_s
+    return nil if s.empty?
+
+    File.expand_path(s)
+  rescue StandardError
+    nil
+  end
+
+  def host_short_name
+    Socket.gethostname.to_s.split(".", 2).first.to_s.strip
   end
 
   def cache_ts_iso(cache)
@@ -4046,15 +4109,27 @@ class OpsTabServer
       "needs_you" => needs_you_card(sessions, prs, linear, quota, rows),
       "prs" => card(prs, source("prs")["fetched_at"], @prs_error),
       "linear" => card(linear, source("linear")["fetched_at"], @linear_error),
-      "quota" => card(quota_with_drivers(quota, sessions), source("quota")["fetched_at"], @quota_error),
+      "quota" => card(quota_with_users(quota, sessions), source("quota")["fetched_at"], @quota_error),
       "machines" => card(machines, source("machines")["fetched_at"], @machines_error)
     }
   end
 
-  # Drivers come from the local sessions on every compose, so the list is as
+  # Users come from the local sessions on every compose, so the list is as
   # fresh as the agents card while the quota numbers keep their own tick.
-  def quota_with_drivers(quota, sessions)
-    quota.is_a?(Hash) ? quota.merge("drivers" => burn_drivers(sessions)) : quota
+  # Each seat gains a users array. The old drivers list is not sent.
+  def quota_with_users(quota, sessions)
+    return quota unless quota.is_a?(Hash)
+
+    base = quota.key?("drivers") ? quota.reject { |key, _| key == "drivers" } : quota
+    seats = base["seats"]
+    return base unless seats.is_a?(Array)
+
+    grouped = users_by_seat(sessions)
+    base.merge("seats" => seats.map { |seat|
+      next seat unless seat.is_a?(Hash)
+
+      seat.merge("users" => grouped[seat["seat"].to_s] || [])
+    })
   end
 
   def card(data, fetched_at, error)

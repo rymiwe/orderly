@@ -314,20 +314,65 @@ class QuotaTest < Minitest::Test
     FileUtils.rm_f(SEAT_USAGE_HISTORY)
   end
 
-  def test_drivers_name_label_and_pool_of_working_sessions_only
+  def test_users_map_working_sessions_onto_seats_and_strip_paths
     srv = OpsTabServer.allocate
+    started = "2026-10-25T20:00:00Z"
+    home_chair = File.join(HOME, "code/conclave/tmp/chairs/box-chair")
+    home_council = File.join(HOME, "code/conclave/tmp/council/nightly-review/notes")
+    claude = { "seat" => "claude_weekly", "label" => "Claude" }
     sessions = [
-      { "tool" => "claude", "state" => "working", "cwd" => "/home/r/secret-repo", "worktree" => "wt" },
-      { "tool" => "claude", "state" => "working", "cwd" => "/x" },
-      { "tool" => "codex", "state" => "idle", "cwd" => "/y" },
-      { "tool" => "grok", "state" => "working", "cwd" => "/z" }
+      { "tool" => "claude", "state" => "working", "id" => "sess-secret",
+        "cwd" => "/home/r/secret-repo", "worktree" => "wt-secret",
+        "started_at" => started, "resume_command" => "claude --resume sess-secret" },
+      { "tool" => "claude", "state" => "working", "id" => "sess-chair",
+        "cwd" => "/workspace/conclave/tmp/chairs/muse-exhausted/src",
+        "worktree" => "wt-chair", "started_at" => started },
+      { "tool" => "claude", "state" => "working", "cwd" => home_chair, "started_at" => started },
+      { "tool" => "claude", "state" => "idle", "cwd" => "/workspace/conclave/tmp/chairs/not-working" },
+      { "tool" => "claude", "state" => "working", "id" => "escaped",
+        "cwd" => "/workspace/conclave/tmp/chairs/../not-a-chair" },
+      { "tool" => "codex", "state" => "working", "id" => "cx-1",
+        "cwd" => home_council, "worktree" => "wt-council", "started_at" => started },
+      { "tool" => "codex", "state" => "working", "cwd" => "/tmp/plain-codex",
+        "started_at" => "/tmp/secret-started" },
+      { "tool" => "grok", "state" => "working", "id" => "gk-1",
+        "cwd" => "/workspace/conclave/tmp/council/routing-check",
+        "worktree" => "wt-grok", "started_at" => started },
+      { "tool" => "grok", "state" => "waiting", "cwd" => "/workspace/conclave/tmp/chairs/waiting-chair" },
+      { "tool" => "cursor", "state" => "working", "cwd" => "/workspace/conclave/tmp/chairs/cursor-chair" }
     ]
-    drivers = srv.send(:burn_drivers, sessions)
-    assert_equal [{ "label" => "Claude Code", "pool" => "Claude", "sessions" => 2 },
-                  { "label" => "Grok CLI", "pool" => "SuperGrok", "sessions" => 1 }], drivers
-    refute_match(/secret|wt|home/, JSON.dump(drivers))
-    assert_equal [], srv.send(:burn_drivers, nil)
-    assert_equal({ "seats" => [], "drivers" => drivers }, srv.send(:quota_with_drivers, { "seats" => [] }, sessions))
-    assert_nil srv.send(:quota_with_drivers, nil, sessions)
+    quota = {
+      "drivers" => [{ "label" => "Claude Code", "pool" => "Claude", "sessions" => 9 }],
+      "seats" => [
+        claude,
+        { "seat" => "codex" },
+        { "seat" => "cursor_models" },
+        { "seat" => "supergrok" }
+      ]
+    }
+    out = srv.send(:quota_with_users, quota, sessions)
+    machine = Socket.gethostname.to_s.split(".", 2).first
+    users = out["seats"].to_h { |s| [s["seat"], s["users"]] }
+    assert_equal [
+      { "label" => "Claude Code", "machine" => machine, "started_at" => started },
+      { "label" => "Chair: muse-exhausted", "machine" => machine, "started_at" => started },
+      { "label" => "Chair: box-chair", "machine" => machine, "started_at" => started },
+      { "label" => "Claude Code", "machine" => machine }
+    ], users["claude_weekly"]
+    assert_equal [
+      { "label" => "Council: nightly-review", "machine" => machine, "started_at" => started },
+      { "label" => "Codex", "machine" => machine }
+    ], users["codex"]
+    assert_equal [
+      { "label" => "Council: routing-check", "machine" => machine, "started_at" => started }
+    ], users["supergrok"]
+    assert_equal [], users["cursor_models"]
+    refute out.key?("drivers")
+    refute claude.key?("users")
+    dumped = JSON.dump(out)
+    refute_match(%r{secret|wt-|sess-|home/r|resume|not-working|not-a-chair|escaped|notes|waiting-chair|cursor-chair|plain-codex|secret-started}, dumped)
+    assert_nil srv.send(:quota_with_users, nil, sessions)
+    assert_equal({ "seats" => [] }, srv.send(:quota_with_users, { "seats" => [], "drivers" => [{ "label" => "x" }] }, nil))
+    assert_equal [], srv.send(:quota_with_users, { "seats" => [{ "seat" => "codex" }] }, nil)["seats"][0]["users"]
   end
 end

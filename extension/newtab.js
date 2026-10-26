@@ -58,6 +58,12 @@
   var BUILDER_ONLY = { supergrok: true };
   var famPinned = null;
   var famPreview = null;
+  // Which pools are open survives a poll rebuild. Keyed by seat id.
+  // ?open=id,id starts them open so a capture can show the expanded state.
+  var openPools = {};
+  (new URLSearchParams(location.search).get("open") || "").split(",").forEach(function (id) {
+    if (id) openPools[id] = true;
+  });
 
   var payload = null;
   var fetchError = null;
@@ -1340,9 +1346,95 @@
       chips.push(spendChip(od, capped));
     }
     return el("div", { class: "lab" },
+      twist(seat, seatUsers(seat)) || el("span", { class: "twist gap", "aria-hidden": "true" }),
       el("b", { title: seat.label || seat.seat || "" }, seat.label || seat.seat || ""),
       el("span", { class: "star", "aria-hidden": "true" }),
       chips);
+  }
+
+  // Users of this pool. Empty means no chevron and no click.
+  function seatUsers(seat) {
+    if (!seat || !Array.isArray(seat.users)) return [];
+    return seat.users.filter(function (u) { return u && u.label; });
+  }
+
+  // A right-pointing chevron that turns down while the pool is open.
+  // The turn is a transform with no transition, so reduced motion has nothing to disable.
+  function twist(seat, users) {
+    var open, btn, svg, path;
+    if (!users.length) return null;
+    open = !!openPools[seat.seat];
+    btn = el("button", {
+      type: "button",
+      class: "twist",
+      "aria-expanded": open ? "true" : "false",
+      "aria-label": (open ? "Hide" : "Show") + " what is using " + (seat.label || seat.seat)
+    });
+    svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("width", "8");
+    svg.setAttribute("height", "8");
+    svg.setAttribute("viewBox", "0 0 8 8");
+    svg.setAttribute("aria-hidden", "true");
+    path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M2.2 1.1 L6.1 4 L2.2 6.9");
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", "currentColor");
+    path.setAttribute("stroke-width", "1.25");
+    path.setAttribute("stroke-linecap", "round");
+    path.setAttribute("stroke-linejoin", "round");
+    svg.appendChild(path);
+    btn.appendChild(svg);
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      togglePool(seat);
+    });
+    return btn;
+  }
+
+  function togglePool(seat) {
+    openPools[seat.seat] = !openPools[seat.seat];
+    render();
+  }
+
+  // The seat plus, when it is open, one child row per user directly under it.
+  function appendSeat(rows, seat, cls, live, label, bar, detail, now) {
+    var users = seatUsers(seat);
+    var open = !!(users.length && openPools[seat.seat]);
+    var vendor = seatVendor(seat);
+    var atEnd = cls.indexOf("vendor-end") !== -1;
+    var row = el("div", {
+      class: cls + (users.length ? " has-users" : "") + (open ? " open" : ""),
+      "data-seat": seat.seat,
+      "data-users": users.length ? String(users.length) : null,
+      "data-open": open ? "true" : null,
+      "data-burn": live && BURN_TITLE[seat.burn] ? seat.burn : null
+    }, label, bar, detail);
+    if (users.length) {
+      row.addEventListener("click", function (e) {
+        var t = e.target;
+        if (t && t.closest && t.closest("button, a")) return;
+        togglePool(seat);
+      });
+    }
+    rows.push(row);
+    if (!open) return;
+    users.forEach(function (user, i) {
+      rows.push(userSubrow(seat, user, vendor, atEnd && i === users.length - 1, now));
+    });
+  }
+
+  // label · machine · duration. Duration comes from started_at. No path, id, or rate.
+  function userSubrow(seat, user, vendor, last, now) {
+    var bits = [];
+    var dur = user.started_at ? formatAge(user.started_at, now) : "";
+    if (user.machine) bits.push(String(user.machine));
+    if (dur) bits.push(dur);
+    var text = String(user.label) + (bits.length ? " · " + bits.join(" · ") : "");
+    return el("div", {
+      class: "subrow" + (vendor ? " " + vendor : "") + (last ? " last" : ""),
+      "data-sub": seat.seat,
+      title: text
+    }, String(user.label), bits.length ? el("span", { class: "meta" }, " · " + bits.join(" · ")) : null);
   }
 
   // Display only. The name is the router's suggestion; the parenthesis is its
@@ -1544,17 +1636,6 @@
     return String(text).indexOf("%") !== -1;
   }
 
-  // One line per local tool with a working session: label and pool, no rates.
-  function driversBlock(list) {
-    if (!Array.isArray(list) || !list.length) return null;
-    return el("div", { class: "drivers" }, el("div", { class: "eyebrow" }, "Running now"),
-      list.map(function (d) {
-        var n = Number(d.sessions) > 1 ? " (" + Number(d.sessions) + ")" : "";
-        var text = String(d.label || "") + n + " · " + String(d.pool || "");
-        return el("div", { class: "drv", title: text }, text);
-      }));
-  }
-
   function renderRail(now) {
     var c = card("quota");
     var seats;
@@ -1607,7 +1688,7 @@
         // nor Sol (tested 2026-10-08), so its bucket stays grey too.
         if (seat.seat === "codex" && seat.plan === "free") renewal.textContent = "Pro ended · free plan has no Astra or Sol";
         detail = el("span", { class: "v", title: renewal.title }, renewal);
-        rows.push(el("div", { class: rowCls + " ended", "data-seat": seat.seat }, seatLabel(seat), el("div", { class: "meter" }, track), detail));
+        appendSeat(rows, seat, rowCls + " ended", false, seatLabel(seat), el("div", { class: "meter" }, track), detail, now);
         return;
       }
       // The server's text also feeds the needs-you list, which has no meter.
@@ -1696,11 +1777,9 @@
       detail.title = absent && seat.note ? seat.note + " " + detail.textContent : detail.textContent;
       // The row has no burn text. The dot's title and this tooltip carry it.
       if (live && BURN_TITLE[seat.burn]) detail.title += " · " + BURN_TITLE[seat.burn];
-      rows.push(el("div", { class: rowCls + burnClass(seat, live), "data-seat": seat.seat, "data-burn": live && BURN_TITLE[seat.burn] ? seat.burn : null }, seatLabel(seat), bar, detail));
+      appendSeat(rows, seat, rowCls + burnClass(seat, live), live, seatLabel(seat), bar, detail, now);
     });
     railEl.replaceChildren.apply(railEl, [hostSuggestionLine(c && c.data && c.data.host_suggestion)].concat(rows));
-    var drivers = driversBlock(c && c.data && c.data.drivers);
-    if (drivers) railEl.appendChild(drivers);
     railEl.appendChild(el("div", { class: "rail-key" },
       "dashed = metered · dotted = builder only · \u2605 first usable pool for the family",
       el("span", { class: "state" })));
