@@ -1507,8 +1507,12 @@ class OpsTabServer
     end
 
     @overlay = { "version" => 1, "entries" => parsed["entries"] }
-  rescue JSON::ParserError => e
-    warn "needs-you overlay left unread: #{e.message}"
+  rescue JSON::ParserError, SystemCallError => e
+    # Unreadable (EACCES, EISDIR, a file gone between the check and the read)
+    # or bad JSON: start with an empty overlay. The file is not deleted or
+    # rewritten here; a later successful save can replace it.
+    @overlay = { "version" => 1, "entries" => {} }
+    warn "needs-you overlay left unread: #{e.class}: #{e.message}"
   end
 
   def save_overlay

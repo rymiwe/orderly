@@ -27,6 +27,35 @@ class NeedsYouActionsTest < Minitest::Test
     OpsTabServer.allocate
   end
 
+  def test_unreadable_overlay_file_loads_empty_and_is_left_alone
+    skip "root can read a mode-000 file" if Process.uid.zero?
+
+    had = File.file?(OVERLAY_PATH)
+    saved = had ? File.binread(OVERLAY_PATH) : nil
+    body = JSON.generate({ "version" => 1, "entries" => { "github:acme/widgets#9:review" => { "mode" => "pending" } } })
+    FileUtils.mkdir_p(File.dirname(OVERLAY_PATH))
+    File.write(OVERLAY_PATH, body)
+    File.chmod(0o000, OVERLAY_PATH)
+    begin
+      s = server
+      _out, err = capture_io { s.send(:load_overlay) }
+      assert_equal({ "version" => 1, "entries" => {} }, s.instance_variable_get(:@overlay))
+      assert_match(/needs-you overlay left unread: Errno::EACCES/, err)
+      assert_equal 1, err.lines.size
+      assert File.file?(OVERLAY_PATH)
+      assert_equal 0, File.stat(OVERLAY_PATH).mode & 0o777
+      File.chmod(0o600, OVERLAY_PATH)
+      assert_equal body, File.read(OVERLAY_PATH)
+    ensure
+      File.chmod(0o600, OVERLAY_PATH) if File.exist?(OVERLAY_PATH)
+      if had
+        File.binwrite(OVERLAY_PATH, saved)
+      else
+        FileUtils.rm_f(OVERLAY_PATH)
+      end
+    end
+  end
+
   def ago(seconds, now = Time.now.utc)
     (now - seconds).utc.iso8601
   end
