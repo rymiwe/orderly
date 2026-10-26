@@ -3343,6 +3343,28 @@ class OpsTabServer
     out
   end
 
+  # The until-change token for each clear_key, built from every row with that
+  # key (several Linear mentions on one issue share a key). One distinct token
+  # is kept as is, so an entry recorded before this aggregate still matches
+  # while its key has one row. Several distinct tokens become a digest of the
+  # sorted set, so row order never matters and any new or removed token
+  # changes it.
+  def overlay_change_tokens(rows)
+    sets = Hash.new { |h, k| h[k] = [] }
+    rows.each do |row|
+      key = row["clear_key"].to_s
+      next if key.empty?
+
+      sets[key] << row["change_token"].to_s
+    end
+    sets.transform_values do |tokens|
+      distinct = tokens.uniq.sort
+      next distinct.first if distinct.length == 1
+
+      "set:#{Digest::SHA256.hexdigest(JSON.generate(distinct))}"
+    end
+  end
+
   # Precise token: oid, latest thread-comment URL, latest issue-comment URL.
   # A missing piece is omitted. updated_at is used only when all three are
   # missing. Team rows also append sorted slugs so a team change is a change.
@@ -4224,11 +4246,11 @@ class OpsTabServer
     !pending_confirmed?(entry, avail)
   end
 
-  def until_change_due?(entry, row, now)
+  def until_change_due?(entry, token, now)
     at = parse_time(entry["at"])
     return true if at && now >= (at + UNTIL_CHANGE_BACKSTOP)
 
-    entry["token"].to_s != row["change_token"].to_s
+    entry["token"].to_s != token.to_s
   end
 
   def source_for_clear_key(key)
@@ -4242,6 +4264,7 @@ class OpsTabServer
   # is kept and no clock rule runs.
   def project_overlay(raw_rows, entries, availability, now = utc_now)
     raw_by_key = overlay_rows_by_key(raw_rows)
+    tokens = overlay_change_tokens(raw_rows)
     pending_keys = []
     snoozed_keys = []
     hidden = {}
@@ -4278,7 +4301,7 @@ class OpsTabServer
         snoozed_keys << key
         kept[key] = entry
       when "until_change"
-        next if until_change_due?(entry, row, now)
+        next if until_change_due?(entry, tokens[key], now)
 
         hidden[key] = true
         snoozed_keys << key
@@ -4409,7 +4432,7 @@ class OpsTabServer
       "mode" => mode,
       "at" => iso(now),
       "until" => until_iso,
-      "token" => row["change_token"].to_s,
+      "token" => overlay_change_tokens(raw)[clear_key].to_s,
       "source_fetched_at" => avail["fetched_at"],
       "source" => row["source"].to_s
     }
