@@ -185,9 +185,21 @@ button.chip:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .seat .v .dot.dot-yellow{background:var(--warn);--dot:var(--warn)}
 .seat .v .dot.dot-red{background:var(--crit);--dot:var(--crit)}
 @keyframes dot-breathe{from{opacity:.45;box-shadow:0 0 0 0 color-mix(in srgb,var(--dot) 35%,transparent)}to{opacity:1;box-shadow:0 0 0 3px color-mix(in srgb,var(--dot) 35%,transparent)}}
-.drivers{grid-column:1/-1;margin-top:10px;padding-top:6px;border-top:1px solid var(--line)}
-.drivers .eyebrow{margin:0 0 3px}
-.drv{font-family:var(--mono);font-size:11px;color:var(--ink-2);padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Pool users sit in child rows under the pool. The chevron is the only
+   affordance, and only a pool that has users gets one. It turns by a
+   transform with no transition, so prefers-reduced-motion has nothing to
+   disable. */
+.seat .twist{all:unset;cursor:pointer;flex:none;width:12px;height:12px;margin-right:1px;color:var(--muted);display:inline-flex;align-items:center;justify-content:center}
+.seat .twist.gap{visibility:hidden;pointer-events:none}
+.seat .twist svg{display:block}
+.seat .twist:focus-visible{outline:1px solid var(--accent);outline-offset:1px;border-radius:2px}
+.seat.has-users{cursor:pointer}
+.seat.open .twist svg{transform:rotate(90deg);transform-origin:center}
+.seat.open.vendor-end{border-bottom-right-radius:0}
+.subrow{grid-column:1/-1;padding:0 10px 1px 24px;border-left:3px solid var(--vendor,var(--line-strong));background:color-mix(in srgb,var(--vendor,transparent) 4%,transparent);font-family:var(--mono);font-size:11px;line-height:1.55;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.subrow.claude{--vendor:var(--v-claude)} .subrow.codex{--vendor:var(--v-codex)} .subrow.cursor{--vendor:var(--v-cursor)} .subrow.grok{--vendor:var(--v-grok)} .subrow.muse{--vendor:var(--v-muse)} .subrow.google{--vendor:var(--v-google)}
+.subrow .meta{color:var(--muted)}
+.subrow.last{padding-bottom:4px;border-bottom-right-radius:4px}
 .seat:hover{background:color-mix(in srgb,var(--vendor,transparent) 18%,transparent)}
 .meter{position:relative;height:6px}
 .meter .track{position:absolute;top:0;bottom:0;width:50%;border-radius:3px;background:color-mix(in srgb,var(--ink) 14%,transparent)}

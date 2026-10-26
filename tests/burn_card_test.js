@@ -1,4 +1,4 @@
-// Quota rail burn outline, status dot, and running-now list. Runs newtab.js
+// Quota rail burn outline, status dot, and pool sub-rows. Runs newtab.js
 // against the same tiny DOM stub as machines_card_test.js (plus first/lastChild,
 // which the rail uses) with one /cards payload. No network.
 // The dot colour is reached the same way as the other helpers in this file:
@@ -12,7 +12,7 @@ const fs = require("fs"), path = require("path"), vm = require("vm"), assert = r
 const SRC = process.env.NEWTAB_JS || path.join(__dirname, "..", "extension", "newtab.js");
 
 class Node {
-  constructor(tag, text) { this.tagName = tag; this.children = []; this.attrs = {}; this.className = ""; this.style = { setProperty() {} }; this._text = text; this.hidden = false; this.value = ""; this.placeholder = ""; }
+  constructor(tag, text) { this.tagName = tag; this.children = []; this.attrs = {}; this.className = ""; this.style = { setProperty() {} }; this._text = text; this.hidden = false; this.value = ""; this.placeholder = ""; this._listeners = {}; }
   get textContent() { return this._text != null ? this._text : this.children.map((c) => c.textContent).join(" "); }
   set textContent(v) { this._text = String(v); this.children = []; }
   appendChild(c) { this.children.push(c); return c; }
@@ -25,7 +25,11 @@ class Node {
   setAttribute(k, v) { this.attrs[k] = String(v); }
   getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
   removeAttribute(k) { delete this.attrs[k]; }
-  addEventListener() {}
+  addEventListener(type, fn) { (this._listeners[type] = this._listeners[type] || []).push(fn); }
+  click() {
+    const e = { target: this, stopPropagation() {}, preventDefault() {} };
+    (this._listeners.click || []).forEach((fn) => fn(e));
+  }
   get classList() { const n = this; return { add() {}, remove() {}, toggle() {}, contains: (c) => n.className.split(/\s+/).includes(c) }; }
   querySelector() { return null; }
   querySelectorAll() { return []; }
@@ -40,6 +44,7 @@ function run(payload, opts) {
     visibilityState: "hidden", title: "",
     getElementById: (id) => (ids[id] = ids[id] || new Node("div")),
     createElement: (t) => new Node(t),
+    createElementNS: (_ns, t) => new Node(t),
     createTextNode: (t) => new Node("#text", t),
     addEventListener() {}, querySelector: () => null, querySelectorAll: () => [],
     body: new Node("body"), documentElement: new Node("html")
@@ -60,7 +65,7 @@ function run(payload, opts) {
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} } };
   ctx.window = ctx;
   vm.runInNewContext(fs.readFileSync(SRC, "utf8"), ctx, { filename: SRC });
-  return new Promise((r) => setTimeout(() => r(ids.rail), 20));
+  return new Promise((r) => setTimeout(() => { run.ids = ids; r(ids.rail); }, 20));
 }
 
 const now = new Date();
@@ -168,19 +173,61 @@ const tests = {
     const rail = await run(quota(SEATS, []));
     assert.ok(!/burning/.test(row(rail, "claude_weekly").textContent), "burn text drawn in the row");
   },
-  async drivers_render_one_line_each_with_label_and_pool() {
-    const rail = await run(quota(SEATS, [{ label: "Claude Code", pool: "Claude", sessions: 2 }, { label: "Grok CLI", pool: "SuperGrok", sessions: 1 }]));
-    const block = rail.all().find((n) => n.className === "drivers");
-    assert.ok(block, "no drivers block");
-    assert.ok(block.textContent.includes("Running now"));
-    const lines = block.all().filter((n) => n.className === "drv").map((n) => n.textContent);
-    assert.deepStrictEqual(lines, ["Claude Code (2) · Claude", "Grok CLI · SuperGrok"]);
-  },
-  async no_drivers_means_no_block() {
-    for (const drivers of [[], undefined]) {
-      const rail = await run(quota(SEATS, drivers));
-      assert.ok(!rail.all().some((n) => n.className === "drivers"), "empty drivers drew a block");
-    }
+  async running_now_is_gone_and_only_seats_with_users_get_a_chevron() {
+    assert.ok(!fs.readFileSync(SRC, "utf8").includes("Running now"), "page script still says Running now");
+    assert.ok(!HTML.includes("Running now"), "page still says Running now");
+    const fixed = Date.parse("2026-10-25T20:00:00Z");
+    const at = (min) => new Date(fixed - (min * 60 + 30) * 1000).toISOString();
+    const seats = [
+      seat({ seat: "claude_weekly", label: "Claude", users: [
+        { label: "Chair: muse-exhausted", machine: "bld", started_at: at(18) },
+        { label: "Council: routing-check", machine: "bld", started_at: at(6), cwd: "/secret/path", id: "sess-secret" }
+      ] }),
+      seat({ seat: "codex", label: "Codex", vendor: "codex", subscription: "codex", users: [] }),
+      seat({ seat: "cursor_models", label: "Cursor Models", vendor: "cursor", subscription: "cursor" }),
+      seat({ seat: "supergrok", label: "SuperGrok", vendor: "grok", subscription: "grok", users: [
+        { label: "Grok CLI", machine: "bld" }
+      ] })
+    ];
+    const rail = await run(quota(seats, [{ label: "Claude Code", pool: "Claude", sessions: 2 }]), { now: fixed });
+    assert.ok(!/Running now/.test(rail.textContent), rail.textContent);
+    assert.ok(!rail.all().some((n) => n.className === "drivers"), "drivers block still drawn");
+    const twist = (id) => row(rail, id).all().find((n) => n.tagName === "button" && /\btwist\b/.test(n.className));
+    const claudeBtn = twist("claude_weekly");
+    assert.ok(claudeBtn, "claude row has no chevron");
+    assert.strictEqual(claudeBtn.attrs.type, "button");
+    assert.strictEqual(claudeBtn.attrs["aria-expanded"], "false");
+    assert.ok(claudeBtn.attrs["aria-label"].includes("Claude"));
+    assert.strictEqual(twist("codex"), undefined, "empty users drew a chevron");
+    assert.strictEqual(twist("cursor_models"), undefined, "a seat with no users drew a chevron");
+    assert.ok(row(rail, "cursor_models").all().some((n) => /\bgap\b/.test(n.className)), "alignment gap missing");
+    assert.ok(!row(rail, "cursor_models").className.includes("has-users"));
+    assert.ok(!rail.all().some((n) => n.attrs && n.attrs["data-sub"]), "closed row drew sub-rows");
+    claudeBtn.click();
+    const open = row(rail, "claude_weekly");
+    assert.strictEqual(open.attrs["data-open"], "true");
+    assert.ok(/\bopen\b/.test(open.className));
+    assert.strictEqual(twist("claude_weekly").attrs["aria-expanded"], "true");
+    const subs = rail.all().filter((n) => n.className && n.className.split(/\s+/).includes("subrow"));
+    assert.strictEqual(subs.length, 2);
+    assert.strictEqual(subs[0].attrs["data-sub"], "claude_weekly");
+    assert.strictEqual(subs[0].attrs.title, "Chair: muse-exhausted · bld · 18m");
+    assert.strictEqual(subs[1].attrs.title, "Council: routing-check · bld · 6m");
+    assert.ok(!/secret|sess-/.test(subs.map((s) => s.attrs.title).join(" ")));
+    assert.strictEqual(row(rail, "codex").attrs["data-open"], undefined);
+    const grokBtn = twist("supergrok");
+    assert.strictEqual(grokBtn.attrs["aria-expanded"], "false");
+    grokBtn.click();
+    const grokSubs = rail.all().filter((n) => n.attrs && n.attrs["data-sub"] === "supergrok");
+    assert.strictEqual(grokSubs.length, 1);
+    assert.strictEqual(grokSubs[0].attrs.title, "Grok CLI · bld");
+    (run.ids.q._listeners.input || []).forEach((fn) => fn());
+    assert.strictEqual(row(rail, "claude_weekly").attrs["data-open"], "true", "claude closed across re-render");
+    assert.strictEqual(row(rail, "supergrok").attrs["data-open"], "true", "grok closed across re-render");
+    assert.strictEqual(row(rail, "codex").attrs["data-open"], undefined);
+    const still = rail.all().filter((n) => n.className && n.className.split(/\s+/).includes("subrow"));
+    assert.strictEqual(still.length, 3);
+    assert.ok(still.every((n) => n.attrs["data-sub"] !== "cursor_models"));
   },
   // Replaces dot_colour_follows_pace_caps_and_burn from the breathing-dot
   // change. Pace, caps, and percent no longer choose the colour.
@@ -318,6 +365,10 @@ const tests = {
     assert.ok(blocks.some((b) => /transition\s*:\s*none\s*!important/.test(b)), "global transition kill missing");
     assert.ok(!blocks.some((b) => /\.dot[\s\S]*animation\s*:\s*none/.test(b)),
       "reduced motion still disables the dot");
+    // The chevron turns with a transform and no transition, so reduced motion
+    // has nothing to disable and the open state stays visible.
+    assert.match(CSS, /\.seat\.open \.twist svg\{[^}]*transform:\s*rotate\(90deg\)/);
+    assert.ok(!/\.twist[^{]*\{[^}]*(?:animation|transition)\s*:/.test(CSS), "chevron animates");
     assert.match(HTML, /Deliberate exception \(Ryan 2026-10-25\)/);
     const animatedRows = [];
     walkRules(cssRules(CSS), (r) => {
