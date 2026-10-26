@@ -184,6 +184,17 @@ Tests for this card: `node tests/machines_card_test.js` (the page, against a DOM
 
 `test/run.sh` runs every suite in `test/` and `tests/` (Ruby with `ruby`, the page tests with `node`), prints one line per file, and exits non-zero if any failed.
 
+The Ruby version is pinned to 3.4.3, the version Orderly runs on, in `.tool-versions` (`ruby 3.4.3`) and `.ruby-version` (`3.4.3`). asdf and mise read `.tool-versions` with no extra settings. asdf reads `.ruby-version` only with `legacy_version_file = yes` in `~/.asdfrc`, and mise reads it only when ruby is in `idiomatic_version_file_enable_tools`. `.ruby-version` is there for rbenv, chruby and editors.
+
+Run the tests under the pinned Ruby with mise:
+
+    mise install                         # once: installs ruby 3.4.3 from .tool-versions
+    mise exec -- gem install webrick     # once: server.rb needs the webrick gem
+    mise exec -- test/run.sh             # runs with the version in .tool-versions
+    mise x ruby@3.4.3 -- test/run.sh     # or name the version, with no version file needed
+
+A plain `test/run.sh` uses whatever `ruby` is first on `PATH`. The json gem version can differ between Rubies (Ruby 3.3 ships json 2.7.2, Ruby 3.4.3 ships json 2.9.1), so run the suite under 3.4.3 before merging.
+
 `test/cards_expect_test.rb` is an expect (snapshot) test of the `/cards` payload. Each directory in `test/fixtures/cards/` is one state (`empty`, `typical`, `capped`): `sources.json` holds what each source last returned, and the optional `seat-usage.json`, `history.jsonl` and `machines.json` go through the real quota and machines readers. The test renders `/cards` through `handle_cards` and compares it with `test/expect/cards/<case>.json`. gh, Linear, op, seat-usage, the fleet reader and HTTP are stubbed, the clock is frozen at 2026-10-26T12:00:00Z, and the host name is fixed. Keys are sorted, and the temp HOME is written as `$HOME`. The comparison does not depend on the json gem's formatting: the expected file is parsed, and both sides are printed by the test's own printer (two-space indent, sorted keys, `[]` and `{}` for empties) before they are compared. json 2.8 changed how `JSON.pretty_generate` prints empty arrays, so its output differs between Ruby 3.3 (json 2.7.2) and Ruby 3.4 (json 2.9.1).
 
 When a change to `/cards` is intended, rewrite the expected files and review the diff:
