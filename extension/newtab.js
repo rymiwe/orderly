@@ -604,19 +604,20 @@
     return n;
   }
 
-  function onAction(row, ev) {
+  // A link keeps its native navigation (plain, Ctrl/Cmd/Shift, or middle
+  // click): the hide is recorded and the keepalive POST sent, and the browser
+  // follows the href. Only a non-link control (a button) has its default
+  // suppressed. A row with no clear_key is a plain link and the event is left
+  // alone.
+  function onAction(row, ev, isLink) {
     var key = rowKey(row);
-    if (ev && ev.preventDefault) ev.preventDefault();
     if (!key) return;
+    if (!isLink && ev && ev.preventDefault) ev.preventDefault();
     delete optimisticSnooze[key];
     optimisticPending[key] = true;
     overlayError = null;
     render();
     postOverlay({ clear_key: key, mode: "pending" });
-    if (row.action_url && /^https?:\/\//i.test(String(row.action_url)) &&
-        window.location && typeof window.location.assign === "function") {
-      window.location.assign(row.action_url);
-    }
   }
 
   function onSnooze(row, seconds) {
@@ -660,10 +661,15 @@
     var cls = row.dim ? "row dim" : "row";
     if (row.action_url && /^https?:\/\//i.test(String(row.action_url))) {
       action = el("a", { class: "act", href: row.action_url }, row.action || "");
+      action.addEventListener("click", function (ev) { onAction(row, ev, true); });
+      // Middle click opens a new tab and fires auxclick, not click.
+      action.addEventListener("auxclick", function (ev) {
+        if (ev && ev.button === 1) onAction(row, ev, true);
+      });
     } else {
       action = el("button", { class: "act", type: "button" }, row.action || "");
+      action.addEventListener("click", function (ev) { onAction(row, ev, false); });
     }
-    action.addEventListener("click", function (ev) { onAction(row, ev); });
     return el("li", { class: cls },
       el("span", { class: row.dim ? "id dim" : "id" },
         row.id || "",

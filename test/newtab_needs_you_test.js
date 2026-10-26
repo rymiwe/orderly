@@ -146,7 +146,7 @@ async function renderNeeds(rows, extra, options) {
   };
   const ctx = {
     document,
-    location: { search: "" },
+    location: options.location || { search: "" },
     URLSearchParams,
     console,
     Math,
@@ -161,7 +161,7 @@ async function renderNeeds(rows, extra, options) {
     clearTimeout,
     setInterval: () => 0,
     clearInterval() {},
-    fetch: options.fetch || (() => Promise.resolve({
+    fetch: options.fetch || ((url, init) => (options.onFetch && options.onFetch(url, init), Promise.resolve({
       ok: true,
       status: 200,
       json: () => Promise.resolve({
@@ -176,7 +176,7 @@ async function renderNeeds(rows, extra, options) {
           }
         }
       })
-    })),
+    }))),
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} }
   };
   ctx.window = ctx;
@@ -666,4 +666,88 @@ test("a saved snooze poll counts the union of server and optimistic keys", async
 
   const other = await snoozeThenSavedPoll(["github:acme/widgets#8:review"], true);
   assert.equal(other.all().find((n) => n.className === "snooze-mark").textContent, "snoozed · 2");
+});
+
+// Native link navigation: the page records the hide and posts it, and never
+// cancels the browser's own handling of a link click.
+function linkEvent(mods) {
+  const ev = Object.assign({ button: 0, ctrlKey: false, metaKey: false, shiftKey: false }, mods);
+  ev.prevented = false;
+  ev.preventDefault = () => { ev.prevented = true; };
+  return ev;
+}
+
+function fire(node, type, ev) {
+  (node._listeners || []).filter((l) => l.type === type).forEach((l) => l.fn(ev));
+}
+
+const LINK_ROWS = [
+  {
+    tier: "direct_ask",
+    id: "#4",
+    title: "Review the latch",
+    since: isoBefore(3 * 60 * 60 * 1000),
+    kind: "pr",
+    clear_key: "github:acme/widgets#4:review",
+    action: "review",
+    action_url: "https://example.test/acme/widgets/4"
+  },
+  {
+    tier: "direct_ask",
+    id: "#5",
+    title: "Keyless link row",
+    since: isoBefore(2 * 60 * 60 * 1000),
+    kind: "pr",
+    action: "open",
+    action_url: "https://example.test/acme/widgets/5"
+  }
+];
+
+async function linkHarness() {
+  const posts = [];
+  const assigned = [];
+  const needs = await renderNeeds(LINK_ROWS, {}, {
+    location: { search: "", assign: (u) => assigned.push(u) },
+    onFetch: (url, init) => {
+      if (init && init.method === "POST") posts.push({ url: String(url), body: JSON.parse(init.body) });
+    }
+  });
+  return { needs, posts, assigned };
+}
+
+for (const [label, type, mods] of [
+  ["plain click", "click", {}],
+  ["ctrl click", "click", { ctrlKey: true }],
+  ["meta click", "click", { metaKey: true }],
+  ["shift click", "click", { shiftKey: true }],
+  ["middle click", "auxclick", { button: 1 }]
+]) {
+  test(`${label} on a keyed link records the hide and keeps native navigation`, async () => {
+    const { needs, posts, assigned } = await linkHarness();
+    const act = row(needs, "Review the latch").all().find((n) => n.className === "act");
+    assert.equal(act.tagName, "a");
+    const ev = linkEvent(mods);
+    fire(act, type, ev);
+    assert.equal(ev.prevented, false, "preventDefault must not be called");
+    assert.deepEqual(assigned, [], "no scripted navigation");
+    assert.equal(posts.length, 1);
+    assert.match(posts[0].url, /\/needs_you\/overlay$/);
+    assert.deepEqual(posts[0].body, { clear_key: "github:acme/widgets#4:review", mode: "pending" });
+    assert.equal(needs.textContent.includes("Review the latch"), false);
+    assert.match(needs.all().find((n) => n.className === "pending-mark").textContent, /pending · 1/);
+  });
+}
+
+test("a keyless link row leaves the event alone and records nothing", async () => {
+  const { needs, posts, assigned } = await linkHarness();
+  const act = row(needs, "Keyless link row").all().find((n) => n.className === "act");
+  for (const [type, mods] of [["click", {}], ["click", { ctrlKey: true }], ["auxclick", { button: 1 }]]) {
+    const ev = linkEvent(mods);
+    fire(act, type, ev);
+    assert.equal(ev.prevented, false);
+  }
+  assert.deepEqual(posts, []);
+  assert.deepEqual(assigned, []);
+  assert.equal(needs.textContent.includes("Keyless link row"), true);
+  assert.equal(needs.all().some((n) => n.className === "pending-mark"), false);
 });
