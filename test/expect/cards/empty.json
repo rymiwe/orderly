@@ -20,13 +20,9 @@
       "data": null,
       "error": "no data yet",
       "fetched_at": null,
-      "pending_keys": [
-
-      ],
+      "pending_keys": [],
       "snoozed": 0,
-      "snoozed_keys": [
-
-      ]
+      "snoozed_keys": []
     },
     "prs": {
       "data": null,

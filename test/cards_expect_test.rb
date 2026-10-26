@@ -10,6 +10,11 @@
 # are stubbed, the clock is frozen, and the host name is fixed. Paths under the
 # temp HOME are written as $HOME. Keys are sorted.
 #
+# The comparison does not depend on the json gem's formatting: the expected
+# file is parsed, and both sides are printed by ExpectJSON below (two-space
+# indent, sorted keys, [] and {} for empties) before they are compared. The
+# json gem changed how pretty_generate prints empty arrays in 2.8.
+#
 # Run:            ruby test/cards_expect_test.rb
 # Rewrite files:  UPDATE_EXPECT=1 ruby test/cards_expect_test.rb
 require "fileutils"
@@ -58,6 +63,45 @@ module NoNetwork
 end
 Net::HTTP.singleton_class.prepend(NoNetwork)
 
+# Deterministic JSON printer for the expect files. Only Ruby core is used, so
+# the output is the same whatever json gem version is loaded.
+module ExpectJSON
+  module_function
+
+  def pretty(value, depth = 0)
+    pad = "  " * (depth + 1)
+    case value
+    when Hash
+      return "{}" if value.empty?
+
+      rows = value.keys.sort.map { |k| "#{pad}#{string(k.to_s)}: #{pretty(value[k], depth + 1)}" }
+      "{\n#{rows.join(",\n")}\n#{"  " * depth}}"
+    when Array
+      return "[]" if value.empty?
+
+      rows = value.map { |v| "#{pad}#{pretty(v, depth + 1)}" }
+      "[\n#{rows.join(",\n")}\n#{"  " * depth}]"
+    when String then string(value)
+    when Integer then value.to_s
+    when Float
+      raise ArgumentError, "non-finite float #{value}" unless value.finite?
+
+      value.to_s
+    when true then "true"
+    when false then "false"
+    when nil then "null"
+    else raise ArgumentError, "not a JSON value: #{value.class}"
+    end
+  end
+
+  ESCAPES = { '"' => '\\"', "\\" => "\\\\", "\n" => "\\n", "\r" => "\\r", "\t" => "\\t", "\b" => "\\b", "\f" => "\\f" }.freeze
+
+  def string(str)
+    body = str.gsub(/["\\\x00-\x1f]/) { |c| ESCAPES[c] || format("\\u%04x", c.ord) }
+    "\"#{body}\""
+  end
+end
+
 class CardsExpectTest < Minitest::Test
   FakeRequest = Struct.new(:headers) do
     def [](key)
@@ -93,10 +137,18 @@ class CardsExpectTest < Minitest::Test
     assert_equal %w[capped empty typical], self.class.cases & %w[capped empty typical]
   end
 
+  def test_expect_printer_is_valid_json_with_compact_empties
+    value = { "z" => [], "a" => {}, "s" => "quote \" back \\ nl \n tab \t ctl \u0001 é ✓",
+              "n" => [0, -3, 1.5, 1.0e+20, true, false, nil], "o" => { "k" => [{}] } }
+    text = ExpectJSON.pretty(value)
+    assert_equal value, JSON.parse(text)
+    assert_equal "{\n  \"a\": {},\n  \"z\": []\n}", ExpectJSON.pretty({ "z" => [], "a" => {} })
+  end
+
   private
 
   def check_case(name)
-    actual = render(name)
+    actual = "#{ExpectJSON.pretty(render(name))}\n"
     path = File.join(EXPECT_DIR, "#{name}.json")
     if ENV["UPDATE_EXPECT"] == "1"
       FileUtils.mkdir_p(EXPECT_DIR)
@@ -104,7 +156,7 @@ class CardsExpectTest < Minitest::Test
       return
     end
     assert File.file?(path), "missing #{path}; run UPDATE_EXPECT=1 ruby test/cards_expect_test.rb"
-    expected = File.read(path)
+    expected = "#{ExpectJSON.pretty(JSON.parse(File.read(path)))}\n"
     return if expected == actual
 
     flunk("/cards for #{name} differs from test/expect/cards/#{name}.json " \
@@ -121,7 +173,7 @@ class CardsExpectTest < Minitest::Test
     res = FakeResponse.new
     build_server(fixture, dir).send(:handle_cards, FakeRequest.new({ "Host" => "127.0.0.1:#{BIND_PORT}" }), res)
     assert_equal 200, res.status
-    "#{JSON.pretty_generate(normalize(JSON.parse(res.body)))}\n"
+    normalize(JSON.parse(res.body))
   end
 
   def build_server(fixture, dir)
@@ -180,18 +232,32 @@ class CardsExpectTest < Minitest::Test
     end
   end
 
+  # Line diff (longest common subsequence) with expected-file line numbers.
+  # Shows up to 60 changed lines, each with its nearest preceding key line.
   def diff(expected, actual)
-    a = expected.lines
-    b = actual.lines
-    out = []
-    [a.size, b.size].max.times do |i|
-      next if a[i] == b[i]
-
-      out << "line #{i + 1}:"
-      out << "- #{a[i]&.chomp}"
-      out << "+ #{b[i]&.chomp}"
-      break if out.size >= 60
+    a = expected.lines.map(&:chomp)
+    b = actual.lines.map(&:chomp)
+    lcs = Array.new(a.size + 1) { Array.new(b.size + 1, 0) }
+    (a.size - 1).downto(0) do |i|
+      (b.size - 1).downto(0) do |j|
+        lcs[i][j] = a[i] == b[j] ? lcs[i + 1][j + 1] + 1 : [lcs[i + 1][j], lcs[i][j + 1]].max
+      end
     end
+    out = []
+    i = j = 0
+    while (i < a.size || j < b.size) && out.size < 60
+      if i < a.size && j < b.size && a[i] == b[j]
+        i += 1
+        j += 1
+      elsif j < b.size && (i >= a.size || lcs[i][j + 1] >= lcs[i + 1][j])
+        out << "+ #{b[j]}   (after expected line #{i})"
+        j += 1
+      else
+        out << "- #{a[i]}   (expected line #{i + 1})"
+        i += 1
+      end
+    end
+    out << "... (diff truncated)" if out.size >= 60
     out.join("\n")
   end
 end

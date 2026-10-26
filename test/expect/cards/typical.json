@@ -66,9 +66,7 @@
             "agent": null,
             "group": "other",
             "id": "AB-7",
-            "labels": [
-
-            ],
+            "labels": [],
             "last_comment_at": null,
             "last_comment_by": null,
             "last_comment_excerpt": null,
@@ -104,9 +102,7 @@
             "title": "Answer the vendor",
             "updated_at": "2026-10-24T15:00:00Z",
             "url": "https://linear.app/example/issue/AB-9",
-            "worktrees": [
-
-            ]
+            "worktrees": []
           }
         ]
       },
@@ -215,9 +211,7 @@
         {
           "action": "reply",
           "action_url": "https://linear.app/example/issue/AB-9#comment-1",
-          "actions": [
-
-          ],
+          "actions": [],
           "ask_from": null,
           "change_token": "https://linear.app/example/issue/AB-9#comment-1",
           "clear_key": "linear:AB-9:mention",
@@ -271,9 +265,7 @@
         },
         {
           "action": "Grok Bot",
-          "actions": [
-
-          ],
+          "actions": [],
           "ask_from": null,
           "change_token": "dead",
           "clear_key": "machine:laptop:heartbeat",
@@ -293,13 +285,9 @@
       ],
       "error": null,
       "fetched_at": "2026-10-26T11:59:30Z",
-      "pending_keys": [
-
-      ],
+      "pending_keys": [],
       "snoozed": 0,
-      "snoozed_keys": [
-
-      ]
+      "snoozed_keys": []
     },
     "prs": {
       "data": {
@@ -351,9 +339,7 @@
             "name_with_owner": "example/garden",
             "number": 22,
             "repo": "garden",
-            "requested_reviewers": [
-
-            ],
+            "requested_reviewers": [],
             "review_decision": null,
             "reviews": 0,
             "thread_comment_at": null,
@@ -390,12 +376,8 @@
             "url": "https://github.com/example/demo/pull/30"
           }
         ],
-        "review_requested_team": [
-
-        ],
-        "team_ask_candidates": [
-
-        ]
+        "review_requested_team": [],
+        "team_ask_candidates": []
       },
       "error": null,
       "fetched_at": "2026-10-26T11:59:30Z"
@@ -455,9 +437,7 @@
             "seat": "claude_fable",
             "status": "live",
             "text": "30% · under pace",
-            "users": [
-
-            ],
+            "users": [],
             "verified_at": "2026-10-26T11:59:00Z",
             "window_s": 604800
           },
@@ -480,9 +460,7 @@
             "seat": "codex",
             "status": "live",
             "text": "22% · under pace",
-            "users": [
-
-            ],
+            "users": [],
             "verified_at": "2026-10-26T11:59:00Z",
             "window_s": 604800
           },
@@ -507,9 +485,7 @@
             "seat": "cursor_models",
             "status": "live",
             "text": "35% · on pace",
-            "users": [
-
-            ],
+            "users": [],
             "verified_at": "2026-10-26T11:59:00Z",
             "window_s": 2592000
           },
@@ -534,9 +510,7 @@
             "seat": "cursor_other",
             "status": "live",
             "text": "12% · under pace",
-            "users": [
-
-            ],
+            "users": [],
             "verified_at": "2026-10-26T11:59:00Z",
             "window_s": 2592000
           },
@@ -561,9 +535,7 @@
             "seat": "grokbot",
             "status": "live",
             "text": "48% · on pace",
-            "users": [
-
-            ],
+            "users": [],
             "verified_at": "2026-10-26T11:59:00Z",
             "window_s": 604800
           },
@@ -584,9 +556,7 @@
             "seat": "supergrok",
             "status": "live",
             "text": "18% · under pace",
-            "users": [
-
-            ],
+            "users": [],
             "verified_at": "2026-10-26T11:59:00Z",
             "window_s": 604800
           },
@@ -612,9 +582,7 @@
             "seat": "muse",
             "status": "live",
             "text": "25% · 5h 5%",
-            "users": [
-
-            ],
+            "users": [],
             "verified_at": "2026-10-26T11:59:00Z",
             "window_s": 604800
           }
@@ -644,9 +612,7 @@
         ],
         "rows": [
           {
-            "agents": [
-
-            ],
+            "agents": [],
             "app_port": null,
             "branch": "main",
             "db_port": 5433,
@@ -658,9 +624,7 @@
             "name": "demo",
             "overmind_live": false,
             "path": "$HOME/src/demo",
-            "pings": [
-
-            ],
+            "pings": [],
             "pr": null,
             "prunable": false,
             "prune_command": null,
@@ -714,9 +678,7 @@
             "repo": "demo"
           },
           {
-            "agents": [
-
-            ],
+            "agents": [],
             "app_port": null,
             "branch": "ab-7-old",
             "db_port": 5433,
@@ -728,9 +690,7 @@
             "name": "demo-ab-7-old",
             "overmind_live": false,
             "path": "$HOME/src/demo/.wt/demo-ab-7-old",
-            "pings": [
-
-            ],
+            "pings": [],
             "pr": null,
             "prunable": true,
             "prune_command": "git -C $HOME/src/demo worktree remove $HOME/src/demo/.wt/demo-ab-7-old",
@@ -765,9 +725,7 @@
             "name": "garden",
             "overmind_live": false,
             "path": "$HOME/src/garden",
-            "pings": [
-
-            ],
+            "pings": [],
             "pr": null,
             "prunable": false,
             "prune_command": null,
