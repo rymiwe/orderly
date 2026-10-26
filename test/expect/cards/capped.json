@@ -20,9 +20,7 @@
       "data": [
         {
           "action": "/usage",
-          "actions": [
-
-          ],
+          "actions": [],
           "ask_from": null,
           "change_token": "exhausted:false|pct:100",
           "clear_key": "quota:claude_weekly",
@@ -41,9 +39,7 @@
         },
         {
           "action": "/usage",
-          "actions": [
-
-          ],
+          "actions": [],
           "ask_from": null,
           "change_token": "exhausted:false|pct:97",
           "clear_key": "quota:claude_fable",
@@ -62,9 +58,7 @@
         },
         {
           "action": "codex",
-          "actions": [
-
-          ],
+          "actions": [],
           "ask_from": null,
           "change_token": "exhausted:false|pct:88",
           "clear_key": "quota:codex",
@@ -83,9 +77,7 @@
         },
         {
           "action": "cursor-agent",
-          "actions": [
-
-          ],
+          "actions": [],
           "ask_from": null,
           "change_token": "exhausted:false|pct:92",
           "clear_key": "quota:cursor_models",
@@ -104,9 +96,7 @@
         },
         {
           "action": "cursor-agent",
-          "actions": [
-
-          ],
+          "actions": [],
           "ask_from": null,
           "change_token": "exhausted:false|pct:100",
           "clear_key": "quota:cursor_other",
@@ -125,9 +115,7 @@
         },
         {
           "action": "Grok Bot",
-          "actions": [
-
-          ],
+          "actions": [],
           "ask_from": null,
           "change_token": "exhausted:true|pct:100",
           "clear_key": "quota:grokbot",
@@ -146,9 +134,7 @@
         },
         {
           "action": "grok",
-          "actions": [
-
-          ],
+          "actions": [],
           "ask_from": null,
           "change_token": "exhausted:true|pct:100",
           "clear_key": "quota:supergrok",
@@ -167,9 +153,7 @@
         },
         {
           "action": "muse",
-          "actions": [
-
-          ],
+          "actions": [],
           "ask_from": null,
           "change_token": "exhausted:true|pct:100",
           "clear_key": "quota:muse",
@@ -189,13 +173,9 @@
       ],
       "error": null,
       "fetched_at": "2026-10-26T11:59:30Z",
-      "pending_keys": [
-
-      ],
+      "pending_keys": [],
       "snoozed": 0,
-      "snoozed_keys": [
-
-      ]
+      "snoozed_keys": []
     },
     "prs": {
       "data": null,
@@ -229,9 +209,7 @@
             "seat": "claude_weekly",
             "status": "live",
             "text": "100% · 5h 100% · ahead of pace",
-            "users": [
-
-            ],
+            "users": [],
             "verified_at": "2026-10-26T11:59:00Z",
             "window_s": 604800
           },
@@ -253,9 +231,7 @@
             "seat": "claude_fable",
             "status": "live",
             "text": "97% · ahead of pace",
-            "users": [
-
-            ],
+            "users": [],
             "verified_at": "2026-10-26T11:59:00Z",
             "window_s": 604800
           },
@@ -282,9 +258,7 @@
             "seat": "codex",
             "status": "live",
             "text": "88% · 5h 64% · ahead of pace",
-            "users": [
-
-            ],
+            "users": [],
             "verified_at": "2026-10-26T11:59:00Z",
             "window_s": 604800
           },
@@ -309,9 +283,7 @@
             "seat": "cursor_models",
             "status": "live",
             "text": "92% · ahead of pace",
-            "users": [
-
-            ],
+            "users": [],
             "verified_at": "2026-10-26T11:59:00Z",
             "window_s": 2592000
           },
@@ -336,9 +308,7 @@
             "seat": "cursor_other",
             "status": "live",
             "text": "100% · ahead of pace",
-            "users": [
-
-            ],
+            "users": [],
             "verified_at": "2026-10-26T11:59:00Z",
             "window_s": 2592000
           },
@@ -364,9 +334,7 @@
             "seat": "grokbot",
             "status": "live",
             "text": "exhausted",
-            "users": [
-
-            ],
+            "users": [],
             "verified_at": "2026-10-26T11:59:00Z",
             "window_s": 604800
           },
@@ -388,9 +356,7 @@
             "seat": "supergrok",
             "status": "live",
             "text": "exhausted · 402 2.5h ago",
-            "users": [
-
-            ],
+            "users": [],
             "verified_at": "2026-10-26T11:59:00Z",
             "window_s": 604800
           },
@@ -412,9 +378,7 @@
             "seat": "muse",
             "status": "live",
             "text": "out of usage",
-            "users": [
-
-            ],
+            "users": [],
             "verified_at": "2026-10-26T11:59:00Z",
             "window_s": 604800
           }
