@@ -378,6 +378,74 @@ class NeedsYouActionsTest < Minitest::Test
     assert_equal 404, missing_res.status
   end
 
+  def test_same_basename_and_number_in_two_repos_hide_and_snooze_independently
+    s = boot
+    s.define_singleton_method(:utc_now) { NOW }
+    s.define_singleton_method(:save_overlay) { nil }
+    mk = lambda do |owner, oid|
+      direct_pr.merge(
+        "number" => 42,
+        "repo" => "widgets",
+        "name_with_owner" => "#{owner}/widgets",
+        "url" => "https://github.com/#{owner}/widgets/pull/42",
+        "requested_at" => (NOW - 3 * 3600).iso8601,
+        "since" => (NOW - 3 * 3600).iso8601,
+        "created_at" => (NOW - 5 * 86_400).iso8601,
+        "updated_at" => (NOW - 2 * 86_400).iso8601,
+        "head_oid" => oid
+      )
+    end
+    load = lambda do |prs|
+      s.instance_variable_get(:@sources)["prs"] = {
+        "data" => { "mine" => [], "review_requested" => prs, "team_ask_candidates" => [] },
+        "fetched_at" => (NOW - 60).iso8601
+      }
+      s.send(:raw_needs_you)
+    end
+    gh = avail("github", fetched: NOW + 5, started: NOW - 60)
+    acme = "github:acme/widgets#42:review"
+    alice = "github:alice/widgets#42:review"
+
+    raw = load.call([mk.call("acme", "a1"), mk.call("alice", "b1")])
+    assert_equal [acme, alice], raw.map { |r| r["clear_key"] }.sort
+
+    # Hide acme only.
+    assert_equal [:ok, nil], s.send(:record_overlay, acme, "pending", nil, NOW)
+    entries = s.send(:overlay_entries)
+    visible, kept, pending_keys, snoozed, = s.send(:project_overlay, raw, entries, gh, NOW)
+    assert_equal [alice], visible.map { |r| r["clear_key"] }
+    assert_equal [acme], pending_keys
+    assert_equal 0, snoozed
+    assert_equal [acme], kept.keys
+
+    # Snooze alice until change. The stored token is alice's, not acme's.
+    assert_equal [:ok, nil], s.send(:record_overlay, alice, "until_change", nil, NOW)
+    entries = s.send(:overlay_entries)
+    assert_equal s.send(:github_review_token, mk.call("alice", "b1")), entries.dig(alice, "token")
+    visible, _kept, _pending, _n, snoozed_keys = s.send(:project_overlay, raw, entries, gh, NOW)
+    assert_empty visible
+    assert_equal [alice], snoozed_keys
+
+    # A new commit on acme does not wake alice's snooze.
+    raw = load.call([mk.call("acme", "a2"), mk.call("alice", "b1")])
+    visible, _kept, _pending, _n, snoozed_keys = s.send(:project_overlay, raw, entries, gh, NOW)
+    assert_equal [alice], snoozed_keys
+    refute_includes visible.map { |r| r["clear_key"] }, alice
+
+    # A new commit on alice wakes alice only.
+    raw = load.call([mk.call("acme", "a2"), mk.call("alice", "b2")])
+    visible, _kept, _pending, _n, snoozed_keys = s.send(:project_overlay, raw, entries, gh, NOW)
+    assert_empty snoozed_keys
+    assert_equal [alice], visible.map { |r| r["clear_key"] }
+
+    # Duplicate rows for one key: record_overlay and project_overlay share
+    # overlay_rows_by_key, which picks the same row in either order.
+    r1 = need(alice, "tok-a")
+    r2 = need(alice, "tok-b")
+    assert_equal "tok-a", s.send(:overlay_rows_by_key, [r1, r2])[alice]["change_token"]
+    assert_equal "tok-a", s.send(:overlay_rows_by_key, [r2, r1])[alice]["change_token"]
+  end
+
   private
 
   def need(key, token, source: "github")

@@ -3238,8 +3238,46 @@ class OpsTabServer
     end
   end
 
+  # Overlay keys name the full owner/repo, so acme/widgets#42 and
+  # alice/widgets#42 never share a hide or snooze. `repo` on a PR row is the
+  # bare repository name; `name_with_owner` comes from the search hit. If that
+  # is missing, the owner/repo in the PR URL is used, then the bare name.
+  # Entries saved under the old bare-name keys match no row and drop as absent
+  # once the GitHub snapshot loads.
+  def github_repo_identity(pr)
+    nwo = pr["name_with_owner"].to_s.strip
+    return nwo unless nwo.empty?
+
+    m = pr["url"].to_s.match(%r{\Ahttps://github\.com/([^/]+/[^/]+)/pull/\d+})
+    return m[1] if m
+
+    pr["repo"].to_s
+  end
+
   def github_key(pr, suffix)
-    "github:#{pr["repo"]}##{pr["number"]}:#{suffix}"
+    "github:#{github_repo_identity(pr)}##{pr["number"]}:#{suffix}"
+  end
+
+  # One row per clear_key, chosen the same way by record_overlay and
+  # project_overlay whatever order the rows arrive in: the smallest
+  # [change_token, since, id, title] wins.
+  def overlay_row_pick(a, b)
+    return b if a.nil?
+
+    ka = [a["change_token"].to_s, a["since"].to_s, a["id"].to_s, a["title"].to_s]
+    kb = [b["change_token"].to_s, b["since"].to_s, b["id"].to_s, b["title"].to_s]
+    (kb <=> ka).negative? ? b : a
+  end
+
+  def overlay_rows_by_key(rows)
+    out = {}
+    rows.each do |row|
+      key = row["clear_key"].to_s
+      next if key.empty?
+
+      out[key] = overlay_row_pick(out[key], row)
+    end
+    out
   end
 
   # Precise token: oid, latest thread-comment URL, latest issue-comment URL.
@@ -4128,13 +4166,7 @@ class OpsTabServer
   # when its own source is loaded. While that source is missing, the entry
   # is kept and no clock rule runs.
   def project_overlay(raw_rows, entries, availability, now = utc_now)
-    raw_by_key = {}
-    raw_rows.each do |row|
-      key = row["clear_key"].to_s
-      next if key.empty?
-
-      raw_by_key[key] = row
-    end
+    raw_by_key = overlay_rows_by_key(raw_rows)
     pending_keys = []
     snoozed_keys = []
     hidden = {}
@@ -4285,7 +4317,7 @@ class OpsTabServer
     return [:bad, "bad mode"] unless %w[pending until until_change].include?(mode)
 
     raw = raw_needs_you
-    row = raw.find { |item| item["clear_key"] == clear_key }
+    row = overlay_rows_by_key(raw)[clear_key]
     return [:missing, "unknown clear_key"] if row.nil?
 
     until_iso = nil
