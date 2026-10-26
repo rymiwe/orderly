@@ -71,6 +71,14 @@
   var prTab = "mine";
   var pollTimer = null;
   var loadSeq = 0;
+  var optimisticPending = {};
+  var optimisticSnooze = {};
+  var inflight = {};
+  var overlayError = null;
+  // loadSeq of the newest /cards request already started when this key's
+  // overlay POST succeeded. Only a response whose seq is greater than that
+  // started after the save and may drop the optimistic hide or snooze.
+  var committedAtSeq = {};
 
   var qEl = document.getElementById("q");
   var metaEl = document.getElementById("meta");
@@ -503,9 +511,12 @@
     return el("span", { class: "chip", "data-flash": "1" }, text);
   }
 
-  function needsActs(row) {
+  // renderNeedRow passes the action element it built, so a click on it also
+  // hides the row (needs-you overlay).
+  function needsActs(row, actionEl) {
     var bits = [];
-    if (row.action_url) bits.push(el("a", { class: "act", href: row.action_url }, row.action || ""));
+    if (actionEl) bits.push(actionEl);
+    else if (row.action_url) bits.push(el("a", { class: "act", href: row.action_url }, row.action || ""));
     else if (row.action) bits.push(el("span", { class: "act" }, row.action));
     var lane = laneChip(row);
     if (lane) bits.push(lane);
@@ -522,11 +533,147 @@
     return bits;
   }
 
+  function overlayUrl() {
+    return CARDS_URL.replace(/\/cards$/, "/needs_you/overlay");
+  }
+
+  function rowKey(row) {
+    return row && row.clear_key ? String(row.clear_key) : "";
+  }
+
+  function postOverlay(body) {
+    var key = body.clear_key;
+    inflight[key] = (inflight[key] || 0) + 1;
+    // keepalive so a link navigation does not cancel the save. The click
+    // still does not wait on the response.
+    fetch(overlayUrl(), {
+      method: "POST",
+      cache: "no-store",
+      keepalive: true,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (res) {
+      if (res.ok) committedAtSeq[key] = loadSeq;
+      inflight[key] = Math.max(0, (inflight[key] || 1) - 1);
+      if (!res.ok) {
+        overlayError = "could not save";
+        render();
+      }
+    }).catch(function () {
+      inflight[key] = Math.max(0, (inflight[key] || 1) - 1);
+      overlayError = "could not save";
+      render();
+    });
+  }
+
+  // A /cards response may drop an optimistic hide or snooze only when that
+  // request started after the overlay POST succeeded. Anything in flight, or
+  // started earlier, captured state from before the save.
+  function optimisticHeld(key, responseSeq) {
+    if (inflight[key] > 0) return true;
+    return committedAtSeq[key] != null && responseSeq <= committedAtSeq[key];
+  }
+
+  function reconcileOverlay(responseSeq) {
+    var c = card("needs_you");
+    var nextPending = {};
+    ((c && c.pending_keys) || []).forEach(function (k) { nextPending[String(k)] = true; });
+    Object.keys(optimisticPending).forEach(function (k) {
+      if (optimisticHeld(k, responseSeq)) nextPending[k] = true;
+    });
+    optimisticPending = nextPending;
+    Object.keys(optimisticSnooze).forEach(function (k) {
+      if (optimisticHeld(k, responseSeq)) return;
+      delete optimisticSnooze[k];
+    });
+  }
+
+  function hiddenMaps(c) {
+    var pending = {};
+    var snooze = {};
+    ((c && c.pending_keys) || []).forEach(function (k) { pending[String(k)] = true; });
+    Object.keys(optimisticPending).forEach(function (k) { pending[k] = true; });
+    ((c && c.snoozed_keys) || []).forEach(function (k) { snooze[String(k)] = true; });
+    Object.keys(optimisticSnooze).forEach(function (k) { snooze[k] = true; });
+    return { pending: pending, snooze: snooze };
+  }
+
+  function mapSize(obj) {
+    var n = 0;
+    Object.keys(obj).forEach(function () { n += 1; });
+    return n;
+  }
+
+  // A link keeps its native navigation (plain, Ctrl/Cmd/Shift, or middle
+  // click): the hide is recorded and the keepalive POST sent, and the browser
+  // follows the href. Only a non-link control (a button) has its default
+  // suppressed. A row with no clear_key is a plain link and the event is left
+  // alone.
+  function onAction(row, ev, isLink) {
+    var key = rowKey(row);
+    if (!key) return;
+    if (!isLink && ev && ev.preventDefault) ev.preventDefault();
+    delete optimisticSnooze[key];
+    optimisticPending[key] = true;
+    overlayError = null;
+    // Re-render on a later macrotask so the clicked anchor stays in the DOM
+    // until the browser has run the click's native link activation.
+    setTimeout(render, 0);
+    postOverlay({ clear_key: key, mode: "pending" });
+  }
+
+  function onSnooze(row, seconds) {
+    var key = rowKey(row);
+    var body;
+    if (!key) return;
+    delete optimisticPending[key];
+    optimisticSnooze[key] = true;
+    overlayError = null;
+    render();
+    if (seconds == null) {
+      body = { clear_key: key, mode: "until_change" };
+    } else {
+      body = { clear_key: key, mode: "until", until: new Date(Date.now() + seconds * 1000).toISOString() };
+    }
+    postOverlay(body);
+  }
+
+  function snoozeControls(row) {
+    if (!rowKey(row)) return null;
+    function btn(label, seconds) {
+      var b = el("button", { class: "snooze-btn", type: "button" }, label);
+      b.addEventListener("click", function (ev) {
+        if (ev && ev.preventDefault) ev.preventDefault();
+        onSnooze(row, seconds);
+      });
+      return b;
+    }
+    return el("span", { class: "snooze" },
+      btn("1h", 3600),
+      btn("4h", 4 * 3600),
+      btn("1d", 86400),
+      btn("until change · 14d", null)
+    );
+  }
+
   function renderNeedRow(row, now) {
     var age = row.since ? formatAge(row.since, now) : "";
     var bucket = ageBucket(row.since, now);
-    return el("li", null,
-      el("span", { class: "id" },
+    var action;
+    var cls = row.dim ? "row dim" : "row";
+    if (row.action_url && /^https?:\/\//i.test(String(row.action_url))) {
+      action = el("a", { class: "act", href: row.action_url }, row.action || "");
+      action.addEventListener("click", function (ev) { onAction(row, ev, true); });
+      // Middle click opens a new tab and fires auxclick, not click.
+      action.addEventListener("auxclick", function (ev) {
+        if (ev && ev.button === 1) onAction(row, ev, true);
+      });
+    } else {
+      action = el("button", { class: "act", type: "button" }, row.action || "");
+      action.addEventListener("click", function (ev) { onAction(row, ev, false); });
+    }
+    return el("li", { class: cls },
+      el("span", { class: row.dim ? "id dim" : "id" },
         row.id || "",
         row.kind === "pr" ? el("span", { class: "chip" }, "gh") : null,
         row.kind === "linear" ? el("span", { class: "chip" }, "linear") : null,
@@ -538,13 +685,30 @@
         row.detail ? el("span", { class: "why" }, row.detail) : null
       ),
       el("span", { class: "age " + bucket }, age),
-      el("span", { class: "acts" }, needsActs(row))
+      el("span", { class: "acts" }, needsActs(row, action), snoozeControls(row))
     );
+  }
+
+  function overlayMarks(pendingN, snoozedN) {
+    var marks = [];
+    if (pendingN) {
+      marks.push(el("li", { class: "row pending" },
+        el("span", { class: "pending-mark" }, "pending · " + pendingN),
+        el("span", null, "hidden until that source refreshes")
+      ));
+    }
+    if (snoozedN) {
+      marks.push(el("li", { class: "row snoozed" },
+        el("span", { class: "snooze-mark" }, "snoozed · " + snoozedN)
+      ));
+    }
+    if (!marks.length) return null;
+    return el("ol", { class: "overlay-marks" }, marks);
   }
 
   function renderNeeds(now) {
     var c = card("needs_you");
-    var rows, shown, headRight, kids;
+    var rows, shown, headRight, kids, maps, pendingN, snoozedN;
     var countLabel = "Needs you";
     if (!hasData(c)) {
       needsEl.replaceChildren(
@@ -557,16 +721,30 @@
       return;
     }
     rows = Array.isArray(c.data) ? c.data : [];
+    maps = hiddenMaps(c);
+    rows = rows.filter(function (r) {
+      var k = rowKey(r);
+      if (!k) return true;
+      return !maps.pending[k] && !maps.snooze[k];
+    });
     shown = rows.filter(function (r) { return matches(needHay(r), query); });
+    pendingN = mapSize(maps.pending);
+    // Union by clear_key. A poll that already read the saved overlay reports
+    // that key while the optimistic snooze is still held; adding the count
+    // on top would show one row as two.
+    snoozedN = mapSize(maps.snooze);
     countLabel = "Needs you · " + shown.length;
     headRight = "priority, then oldest";
     if (staleBits(c).length) headRight = staleBits(c).join(" · ");
+    if (overlayError) headRight = overlayError;
     kids = [
       el("div", { class: "head" },
         el("span", { class: "eyebrow" }, countLabel),
         el("span", { class: "note" }, headRight)
       )
     ];
+    var marks = overlayMarks(pendingN, snoozedN);
+    if (marks) kids.push(marks);
     NEED_TIERS.forEach(function (tier) {
       var group = shown.filter(function (r) { return needTier(r) === tier.id; });
       if (!group.length) return;
@@ -1578,6 +1756,7 @@
       if (n !== loadSeq) return;
       payload = data;
       fetchError = null;
+      reconcileOverlay(n);
       render();
     }).catch(function (err) {
       if (n !== loadSeq) return;

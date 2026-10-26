@@ -60,7 +60,14 @@ class Node {
   removeAttribute(k) {
     delete this.attrs[k];
   }
-  addEventListener() {}
+  addEventListener(type, fn) {
+    this._listeners = this._listeners || [];
+    this._listeners.push({ type, fn });
+  }
+  dispatch(type) {
+    const ev = { preventDefault() {}, target: this };
+    (this._listeners || []).filter((l) => l.type === type).forEach((l) => l.fn(ev));
+  }
   get classList() {
     const n = this;
     return {
@@ -114,19 +121,28 @@ function withFrozenNow(source, nowMs) {
 ` + source;
 }
 
+function nextTask() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 function isoBefore(ms) {
   return new Date(NOW - ms).toISOString();
 }
 
-async function renderNeeds(rows) {
+async function renderNeeds(rows, extra, options) {
+  extra = extra || {};
+  options = options || {};
   const ids = {};
+  const docListeners = [];
   const document = {
     visibilityState: "hidden",
     title: "",
     getElementById: (id) => (ids[id] = ids[id] || new Node("div")),
     createElement: (t) => new Node(t),
     createTextNode: (t) => new Node("#text", t),
-    addEventListener() {},
+    addEventListener(type, fn) {
+      docListeners.push({ type, fn });
+    },
     querySelector: () => null,
     querySelectorAll: () => [],
     body: new Node("body"),
@@ -134,7 +150,7 @@ async function renderNeeds(rows) {
   };
   const ctx = {
     document,
-    location: { search: "" },
+    location: options.location || { search: "" },
     URLSearchParams,
     console,
     Math,
@@ -149,7 +165,7 @@ async function renderNeeds(rows) {
     clearTimeout,
     setInterval: () => 0,
     clearInterval() {},
-    fetch: () => Promise.resolve({
+    fetch: options.fetch || ((url, init) => (options.onFetch && options.onFetch(url, init), Promise.resolve({
       ok: true,
       status: 200,
       json: () => Promise.resolve({
@@ -157,17 +173,23 @@ async function renderNeeds(rows) {
           needs_you: {
             fetched_at: new Date(NOW).toISOString(),
             error: null,
-            data: rows
+            data: rows,
+            pending_keys: extra.pending_keys || [],
+            snoozed: extra.snoozed || 0,
+            snoozed_keys: extra.snoozed_keys || []
           }
         }
       })
-    }),
+    }))),
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} }
   };
   ctx.window = ctx;
   const source = withFrozenNow(fs.readFileSync(SRC, "utf8"), NOW);
   vm.runInNewContext(source, ctx, { filename: SRC });
   await new Promise((resolve) => setTimeout(resolve, 30));
+  ids.needs._fire = (type) => {
+    docListeners.filter((l) => l.type === type).forEach((l) => l.fn({}));
+  };
   return ids.needs;
 }
 
@@ -281,4 +303,478 @@ test("age badges break at exactly one, three, and seven days", async () => {
   const needs = await renderNeeds(rows.map((c) => c.row));
   assert.deepEqual(tiers(needs).map(groupLabel), [`Informational · ${rows.length}`]);
   for (const c of rows) assertBucket(needs, c.title, c.bucket, c.label);
+});
+
+test("dims a team-ask row and keeps its tier count", async () => {
+  const needs = await renderNeeds([
+    {
+      tier: "team_ask",
+      dim: true,
+      id: "#8",
+      title: "platform, frontend asked for a review",
+      since: isoBefore(2 * DAY),
+      kind: "pr",
+      clear_key: "github:acme/widgets#8:team",
+      ask_from: "frontend,platform",
+      action: "review",
+      action_url: "https://example.test/acme/widgets/8"
+    },
+    {
+      tier: "direct_ask",
+      id: "#3",
+      title: "Ada asked for your review",
+      since: isoBefore(DAY),
+      kind: "pr",
+      clear_key: "github:acme/widgets#3:review",
+      action: "review",
+      action_url: "https://example.test/acme/widgets/3"
+    }
+  ]);
+  const blocks = tiers(needs);
+  assert.deepEqual(blocks.map(groupLabel), ["Direct ask · 1", "Team ask · 1"]);
+  const team = row(needs, "platform, frontend asked for a review");
+  assert.ok(team.className.split(/\s+/).includes("dim"), team.className);
+  assert.equal(team.className.includes("dim"), true);
+  assert.ok(needs.textContent.includes("platform"));
+  assert.ok(needs.textContent.includes("frontend"));
+  const direct = row(needs, "Ada asked for your review");
+  assert.equal(direct.className.split(/\s+/).includes("dim"), false);
+});
+
+test("clicking an action hides the row and shows a pending marker", async () => {
+  const needs = await renderNeeds([
+    {
+      tier: "direct_ask",
+      id: "#4",
+      title: "Review the latch",
+      since: isoBefore(3 * 60 * 60 * 1000),
+      kind: "pr",
+      clear_key: "github:acme/widgets#4:review",
+      action: "review",
+      action_url: "https://example.test/acme/widgets/4"
+    },
+    {
+      tier: "informational",
+      id: "q",
+      title: "Codex exhausted",
+      since: isoBefore(DAY),
+      kind: "quota",
+      clear_key: "quota:codex"
+    }
+  ]);
+  assert.equal(needs.textContent.includes("pending"), false);
+  const act = row(needs, "Review the latch").all().find((n) => n.className === "act");
+  assert.ok(act, "action control");
+  act.dispatch("click");
+  await nextTask();
+  assert.equal(needs.textContent.includes("Review the latch"), false);
+  const mark = needs.all().find((n) => n.className === "pending-mark");
+  assert.ok(mark, "pending marker");
+  assert.match(mark.textContent, /pending · 1/);
+  assert.deepEqual(tiers(needs).map(groupLabel), ["Informational · 1"]);
+  assert.equal(needs.all().find((n) => n.className === "eyebrow").textContent, "Needs you · 1");
+});
+
+test("renders snoozed and pending state without counting hidden rows in a tier", async () => {
+  const needs = await renderNeeds([
+    {
+      tier: "direct_ask",
+      id: "#4",
+      title: "Hidden ask",
+      since: isoBefore(DAY),
+      kind: "pr",
+      clear_key: "github:acme/widgets#4:review"
+    },
+    {
+      tier: "direct_ask",
+      id: "#5",
+      title: "Visible ask",
+      since: isoBefore(2 * DAY),
+      kind: "pr",
+      clear_key: "github:acme/widgets#5:review"
+    },
+    {
+      tier: "team_ask",
+      dim: true,
+      id: "#9",
+      title: "platform asked for a review",
+      since: isoBefore(DAY),
+      kind: "pr",
+      clear_key: "github:acme/widgets#9:team"
+    }
+  ], {
+    pending_keys: ["github:acme/widgets#4:review"],
+    snoozed: 2,
+    snoozed_keys: ["github:acme/widgets#1:review", "github:acme/widgets#2:review"]
+  });
+  assert.equal(needs.textContent.includes("Hidden ask"), false);
+  assert.ok(needs.textContent.includes("Visible ask"));
+  assert.ok(needs.textContent.includes("platform asked for a review"));
+  const pending = needs.all().find((n) => n.className === "pending-mark");
+  const snoozed = needs.all().find((n) => n.className === "snooze-mark");
+  assert.equal(pending.textContent, "pending · 1");
+  assert.equal(snoozed.textContent, "snoozed · 2");
+  assert.deepEqual(tiers(needs).map(groupLabel), ["Direct ask · 1", "Team ask · 1"]);
+  assert.equal(needs.all().find((n) => n.className === "eyebrow").textContent, "Needs you · 2");
+  const team = row(needs, "platform asked for a review");
+  assert.ok(team.className.split(/\s+/).includes("dim"));
+});
+
+test("a poll started before the click does not bring the row back", async () => {
+  const rowData = {
+    tier: "direct_ask",
+    id: "#4",
+    title: "Review the latch",
+    since: isoBefore(3 * 60 * 60 * 1000),
+    kind: "pr",
+    clear_key: "github:acme/widgets#4:review",
+    action: "review",
+    action_url: "https://example.test/acme/widgets/4"
+  };
+  const cards = {
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve({
+      cards: {
+        needs_you: {
+          fetched_at: new Date(NOW).toISOString(),
+          error: null,
+          data: [rowData],
+          pending_keys: [],
+          snoozed: 0
+        }
+      }
+    })
+  };
+  let cardsCalls = 0;
+  let releaseStale;
+  const needs = await renderNeeds([rowData], {}, {
+    fetch: (_url, opts) => {
+      if (opts && opts.method === "POST") {
+        assert.equal(opts.keepalive, true);
+        return Promise.resolve({ ok: true, status: 204, json: () => Promise.resolve({}) });
+      }
+      cardsCalls += 1;
+      if (cardsCalls === 1) return Promise.resolve(cards);
+      return new Promise((resolve) => {
+        releaseStale = () => resolve(cards);
+      });
+    }
+  });
+  assert.ok(needs.textContent.includes("Review the latch"));
+  needs._fire("visibilitychange");
+  assert.equal(cardsCalls, 2);
+  const act = row(needs, "Review the latch").all().find((n) => n.className === "act");
+  act.dispatch("click");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(needs.textContent.includes("Review the latch"), false);
+  releaseStale();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(needs.textContent.includes("Review the latch"), false, "stale poll restored the row");
+  assert.match(needs.all().find((n) => n.className === "pending-mark").textContent, /pending · 1/);
+});
+
+// click → GET captures the pre-save list → POST succeeds → that GET resolves
+// (row stays hidden) → a GET started after the POST reconciles it.
+async function pollStraddlingSave(click, later, markClass) {
+  const rowData = {
+    tier: "direct_ask",
+    id: "#4",
+    title: "Review the latch",
+    since: isoBefore(3 * 60 * 60 * 1000),
+    kind: "pr",
+    clear_key: "github:acme/widgets#4:review",
+    action: "review",
+    action_url: "https://example.test/acme/widgets/4"
+  };
+  const events = [];
+  let gets = 0;
+  let releasePost;
+  let releaseMid;
+  let releaseLater;
+  function cards(data) {
+    return {
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({
+        cards: {
+          needs_you: {
+            fetched_at: new Date(NOW).toISOString(),
+            error: null,
+            data,
+            pending_keys: [],
+            snoozed: 0
+          }
+        }
+      })
+    };
+  }
+  const needs = await renderNeeds([rowData], {}, {
+    fetch: (_url, opts) => {
+      if (opts && opts.method === "POST") {
+        return new Promise((resolve) => {
+          releasePost = () => {
+            events.push("post-ok");
+            resolve({ ok: true, status: 204, json: () => Promise.resolve({}) });
+          };
+        });
+      }
+      gets += 1;
+      if (gets === 1) return Promise.resolve(cards([rowData]));
+      if (gets === 2) {
+        events.push("get-start");
+        return new Promise((resolve) => {
+          releaseMid = () => {
+            events.push("get-resolve");
+            resolve(cards([rowData]));
+          };
+        });
+      }
+      events.push("later-get-start");
+      return new Promise((resolve) => {
+        releaseLater = () => resolve(cards(later === "present" ? [rowData] : []));
+      });
+    }
+  });
+  const line = row(needs, "Review the latch");
+  await click(line);
+  assert.equal(needs.textContent.includes("Review the latch"), false);
+  needs._fire("visibilitychange");
+  assert.equal(gets, 2);
+  assert.deepEqual(events, ["get-start"]);
+  releasePost();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(events, ["get-start", "post-ok"]);
+  releaseMid();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(events, ["get-start", "post-ok", "get-resolve"]);
+  assert.equal(needs.textContent.includes("Review the latch"), false, "poll started before the save cleared the row");
+  const held = needs.all().find((n) => n.className === markClass);
+  assert.ok(held, markClass);
+  needs._fire("visibilitychange");
+  assert.equal(gets, 3);
+  assert.equal(events[events.length - 1], "later-get-start");
+  assert.ok(events.indexOf("later-get-start") > events.indexOf("post-ok"));
+  releaseLater();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  return needs;
+}
+
+// The hide re-renders on a later macrotask, after the click's default action.
+async function clickHide(line) {
+  const act = line.all().find((n) => n.className === "act");
+  assert.ok(act, "action control");
+  act.dispatch("click");
+  await nextTask();
+}
+
+function clickSnooze(line) {
+  const btn = line.all().find((n) => n.className === "snooze-btn" && n.textContent === "1h");
+  assert.ok(btn, "snooze control");
+  btn.dispatch("click");
+}
+
+test("a poll started before the hide commits does not clear it", async () => {
+  const present = await pollStraddlingSave(clickHide, "present", "pending-mark");
+  assert.ok(present.textContent.includes("Review the latch"), "ask still present should return");
+  assert.equal(present.all().some((n) => n.className === "pending-mark"), false);
+
+  const absent = await pollStraddlingSave(clickHide, "absent", "pending-mark");
+  assert.equal(absent.textContent.includes("Review the latch"), false, "absent ask should stay gone");
+  assert.equal(absent.all().some((n) => n.className === "pending-mark"), false);
+});
+
+test("a poll started before the snooze commits does not clear it", async () => {
+  const present = await pollStraddlingSave(clickSnooze, "present", "snooze-mark");
+  assert.ok(present.textContent.includes("Review the latch"), "ask still present should return");
+  assert.equal(present.all().some((n) => n.className === "snooze-mark"), false);
+
+  const absent = await pollStraddlingSave(clickSnooze, "absent", "snooze-mark");
+  assert.equal(absent.textContent.includes("Review the latch"), false, "absent ask should stay gone");
+  assert.equal(absent.all().some((n) => n.className === "snooze-mark"), false);
+});
+
+// snooze click → GET starts → server saves the overlay → that GET resolves
+// reporting snoozed:1 and the clear_key while the optimistic snooze is held.
+async function snoozeThenSavedPoll(serverKeys, keepRow) {
+  const key = "github:acme/widgets#4:review";
+  const rowData = {
+    tier: "direct_ask",
+    id: "#4",
+    title: "Review the latch",
+    since: isoBefore(3 * 60 * 60 * 1000),
+    kind: "pr",
+    clear_key: key,
+    action: "review",
+    action_url: "https://example.test/acme/widgets/4"
+  };
+  const events = [];
+  let gets = 0;
+  let releasePost;
+  let releaseMid;
+  function cards(data, snoozedKeys) {
+    return {
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({
+        cards: {
+          needs_you: {
+            fetched_at: new Date(NOW).toISOString(),
+            error: null,
+            data,
+            pending_keys: [],
+            snoozed: snoozedKeys.length,
+            snoozed_keys: snoozedKeys
+          }
+        }
+      })
+    };
+  }
+  const needs = await renderNeeds([rowData], {}, {
+    fetch: (_url, opts) => {
+      if (opts && opts.method === "POST") {
+        return new Promise((resolve) => {
+          releasePost = () => {
+            events.push("post-ok");
+            resolve({ ok: true, status: 204, json: () => Promise.resolve({}) });
+          };
+        });
+      }
+      gets += 1;
+      if (gets === 1) return Promise.resolve(cards([rowData], []));
+      events.push("get-start");
+      return new Promise((resolve) => {
+        releaseMid = () => {
+          events.push("get-resolve");
+          resolve(cards(keepRow ? [rowData] : [], serverKeys));
+        };
+      });
+    }
+  });
+  clickSnooze(row(needs, "Review the latch"));
+  assert.equal(needs.textContent.includes("Review the latch"), false);
+  needs._fire("visibilitychange");
+  assert.equal(gets, 2);
+  assert.deepEqual(events, ["get-start"]);
+  releasePost();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(events, ["get-start", "post-ok"]);
+  releaseMid();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(events, ["get-start", "post-ok", "get-resolve"]);
+  assert.equal(needs.textContent.includes("Review the latch"), false);
+  return needs;
+}
+
+test("a saved snooze poll counts the union of server and optimistic keys", async () => {
+  const key = "github:acme/widgets#4:review";
+  const same = await snoozeThenSavedPoll([key], false);
+  assert.equal(same.all().find((n) => n.className === "snooze-mark").textContent, "snoozed · 1");
+
+  const other = await snoozeThenSavedPoll(["github:acme/widgets#8:review"], true);
+  assert.equal(other.all().find((n) => n.className === "snooze-mark").textContent, "snoozed · 2");
+});
+
+// Native link navigation: the page records the hide and posts it, and never
+// cancels the browser's own handling of a link click.
+function linkEvent(mods) {
+  const ev = Object.assign({ button: 0, ctrlKey: false, metaKey: false, shiftKey: false }, mods);
+  ev.prevented = false;
+  ev.preventDefault = () => { ev.prevented = true; };
+  return ev;
+}
+
+function fire(node, type, ev) {
+  (node._listeners || []).filter((l) => l.type === type).forEach((l) => l.fn(ev));
+}
+
+const LINK_ROWS = [
+  {
+    tier: "direct_ask",
+    id: "#4",
+    title: "Review the latch",
+    since: isoBefore(3 * 60 * 60 * 1000),
+    kind: "pr",
+    clear_key: "github:acme/widgets#4:review",
+    action: "review",
+    action_url: "https://example.test/acme/widgets/4"
+  },
+  {
+    tier: "direct_ask",
+    id: "#5",
+    title: "Keyless link row",
+    since: isoBefore(2 * 60 * 60 * 1000),
+    kind: "pr",
+    action: "open",
+    action_url: "https://example.test/acme/widgets/5"
+  }
+];
+
+async function linkHarness() {
+  const posts = [];
+  const assigned = [];
+  const needs = await renderNeeds(LINK_ROWS, {}, {
+    location: { search: "", assign: (u) => assigned.push(u) },
+    onFetch: (url, init) => {
+      if (init && init.method === "POST") posts.push({ url: String(url), body: JSON.parse(init.body) });
+    }
+  });
+  return { needs, posts, assigned };
+}
+
+for (const [label, type, mods] of [
+  ["plain click", "click", {}],
+  ["ctrl click", "click", { ctrlKey: true }],
+  ["meta click", "click", { metaKey: true }],
+  ["shift click", "click", { shiftKey: true }],
+  ["middle click", "auxclick", { button: 1 }]
+]) {
+  test(`${label} on a keyed link records the hide and keeps native navigation`, async () => {
+    const { needs, posts, assigned } = await linkHarness();
+    const act = row(needs, "Review the latch").all().find((n) => n.className === "act");
+    assert.equal(act.tagName, "a");
+    const ev = linkEvent(mods);
+    fire(act, type, ev);
+    assert.equal(ev.prevented, false, "preventDefault must not be called");
+    assert.deepEqual(assigned, [], "no scripted navigation");
+    assert.equal(posts.length, 1);
+    assert.match(posts[0].url, /\/needs_you\/overlay$/);
+    assert.deepEqual(posts[0].body, { clear_key: "github:acme/widgets#4:review", mode: "pending" });
+    await nextTask();
+    assert.equal(needs.textContent.includes("Review the latch"), false);
+    assert.match(needs.all().find((n) => n.className === "pending-mark").textContent, /pending · 1/);
+  });
+}
+
+test("a keyless link row leaves the event alone and records nothing", async () => {
+  const { needs, posts, assigned } = await linkHarness();
+  const act = row(needs, "Keyless link row").all().find((n) => n.className === "act");
+  for (const [type, mods] of [["click", {}], ["click", { ctrlKey: true }], ["auxclick", { button: 1 }]]) {
+    const ev = linkEvent(mods);
+    fire(act, type, ev);
+    assert.equal(ev.prevented, false);
+  }
+  assert.deepEqual(posts, []);
+  assert.deepEqual(assigned, []);
+  assert.equal(needs.textContent.includes("Keyless link row"), true);
+  assert.equal(needs.all().some((n) => n.className === "pending-mark"), false);
+});
+
+// The browser runs a link's default action after the click handlers return.
+// The clicked anchor must still be in the rendered list at that point, so the
+// row-hiding render may only run on a later macrotask.
+test("the clicked anchor stays rendered through the click and the hide renders afterwards", async () => {
+  const { needs, posts } = await linkHarness();
+  const act = row(needs, "Review the latch").all().find((n) => n.className === "act");
+  const ev = linkEvent({});
+  fire(act, "click", ev);
+  // Default-action point: every listener has returned, no task has run yet.
+  assert.equal(needs.all().includes(act), true, "anchor detached during the click");
+  assert.equal(needs.textContent.includes("Review the latch"), true, "render ran inside the click handler");
+  assert.equal(posts.length, 1, "POST is sent immediately, not deferred");
+  assert.equal(ev.prevented, false);
+  await nextTask();
+  assert.equal(needs.all().includes(act), false, "deferred render did not run");
+  assert.equal(needs.textContent.includes("Review the latch"), false);
+  assert.match(needs.all().find((n) => n.className === "pending-mark").textContent, /pending · 1/);
 });
