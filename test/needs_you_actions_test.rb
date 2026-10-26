@@ -446,6 +446,74 @@ class NeedsYouActionsTest < Minitest::Test
     assert_equal "tok-a", s.send(:overlay_rows_by_key, [r2, r1])[alice]["change_token"]
   end
 
+  # Several Linear mentions on one issue share linear:<issue>:mention. The
+  # until-change token covers every mention, so a new one wakes the snooze
+  # whether its URL sorts before or after the one still showing.
+  def test_until_change_on_a_shared_key_wakes_on_any_new_mention
+    s = boot
+    s.define_singleton_method(:utc_now) { NOW }
+    s.define_singleton_method(:save_overlay) { nil }
+    key = "linear:ENG-7:mention"
+    mention = lambda do |url, mins|
+      {
+        "issue_id" => "ENG-7", "actor" => "sam", "kind" => "mention",
+        "excerpt" => "ping", "at" => (NOW - mins * 60).iso8601,
+        "comment_url" => url, "title" => "Latch", "url" => "https://linear.test/ENG-7"
+      }
+    end
+    rows_for = ->(mentions) { s.send(:needs_you_from_linear, { "mentions" => mentions }, []) }
+    lin = avail("linear", fetched: NOW)
+    m201 = mention.call("https://linear.test/c/201", 30)
+    m202 = mention.call("https://linear.test/c/202", 10)
+    m100 = mention.call("https://linear.test/c/100", 5)
+
+    raw = rows_for.call([m201])
+    assert_equal [key], raw.map { |r| r["clear_key"] }
+    s.define_singleton_method(:raw_needs_you) { raw }
+    assert_equal [:ok, nil], s.send(:record_overlay, key, "until_change", nil, NOW)
+    entries = s.send(:overlay_entries)
+    # One row: the stored token is that row's own token, as before.
+    assert_equal "https://linear.test/c/201", entries.dig(key, "token")
+
+    # Same set: still snoozed.
+    visible, _kept, _p, _n, snoozed_keys = s.send(:project_overlay, rows_for.call([m201]), entries, lin, NOW)
+    assert_empty visible
+    assert_equal [key], snoozed_keys
+
+    # A new mention that sorts after the old one wakes it.
+    visible, _kept, _p, _n, snoozed_keys = s.send(:project_overlay, rows_for.call([m201, m202]), entries, lin, NOW)
+    assert_empty snoozed_keys
+    assert_equal 2, visible.length
+
+    # A new mention that sorts before the old one wakes it too.
+    visible, _kept, _p, _n, snoozed_keys = s.send(:project_overlay, rows_for.call([m100, m201]), entries, lin, NOW)
+    assert_empty snoozed_keys
+    assert_equal 2, visible.length
+
+    # Snoozed with two mentions showing: either row order records the same
+    # token, and either order keeps it snoozed while the set is unchanged.
+    both = rows_for.call([m201, m202])
+    s.define_singleton_method(:raw_needs_you) { both }
+    assert_equal [:ok, nil], s.send(:record_overlay, key, "until_change", nil, NOW)
+    entries = s.send(:overlay_entries)
+    token = entries.dig(key, "token")
+    s.define_singleton_method(:raw_needs_you) { both.reverse }
+    assert_equal [:ok, nil], s.send(:record_overlay, key, "until_change", nil, NOW)
+    assert_equal token, s.send(:overlay_entries).dig(key, "token")
+    [both, both.reverse, both + both].each do |raw_rows|
+      visible, _kept, _p, _n, snoozed_keys = s.send(:project_overlay, raw_rows, entries, lin, NOW)
+      assert_empty visible
+      assert_equal [key], snoozed_keys
+    end
+
+    # A third mention wakes it, again regardless of sort position.
+    [m100, mention.call("https://linear.test/c/999", 1)].each do |extra|
+      visible, _kept, _p, _n, snoozed_keys = s.send(:project_overlay, rows_for.call([m201, extra, m202]), entries, lin, NOW)
+      assert_empty snoozed_keys
+      assert_equal 3, visible.length
+    end
+  end
+
   private
 
   def need(key, token, source: "github")
