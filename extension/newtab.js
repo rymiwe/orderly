@@ -616,7 +616,9 @@
     delete optimisticSnooze[key];
     optimisticPending[key] = true;
     overlayError = null;
-    render();
+    // Re-render on a later macrotask so the clicked anchor stays in the DOM
+    // until the browser has run the click's native link activation.
+    setTimeout(render, 0);
     postOverlay({ clear_key: key, mode: "pending" });
   }
 

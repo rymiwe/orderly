@@ -121,6 +121,10 @@ function withFrozenNow(source, nowMs) {
 ` + source;
 }
 
+function nextTask() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 function isoBefore(ms) {
   return new Date(NOW - ms).toISOString();
 }
@@ -362,6 +366,7 @@ test("clicking an action hides the row and shows a pending marker", async () => 
   const act = row(needs, "Review the latch").all().find((n) => n.className === "act");
   assert.ok(act, "action control");
   act.dispatch("click");
+  await nextTask();
   assert.equal(needs.textContent.includes("Review the latch"), false);
   const mark = needs.all().find((n) => n.className === "pending-mark");
   assert.ok(mark, "pending marker");
@@ -532,7 +537,7 @@ async function pollStraddlingSave(click, later, markClass) {
     }
   });
   const line = row(needs, "Review the latch");
-  click(line);
+  await click(line);
   assert.equal(needs.textContent.includes("Review the latch"), false);
   needs._fire("visibilitychange");
   assert.equal(gets, 2);
@@ -555,10 +560,12 @@ async function pollStraddlingSave(click, later, markClass) {
   return needs;
 }
 
-function clickHide(line) {
+// The hide re-renders on a later macrotask, after the click's default action.
+async function clickHide(line) {
   const act = line.all().find((n) => n.className === "act");
   assert.ok(act, "action control");
   act.dispatch("click");
+  await nextTask();
 }
 
 function clickSnooze(line) {
@@ -733,6 +740,7 @@ for (const [label, type, mods] of [
     assert.equal(posts.length, 1);
     assert.match(posts[0].url, /\/needs_you\/overlay$/);
     assert.deepEqual(posts[0].body, { clear_key: "github:acme/widgets#4:review", mode: "pending" });
+    await nextTask();
     assert.equal(needs.textContent.includes("Review the latch"), false);
     assert.match(needs.all().find((n) => n.className === "pending-mark").textContent, /pending · 1/);
   });
@@ -750,4 +758,23 @@ test("a keyless link row leaves the event alone and records nothing", async () =
   assert.deepEqual(assigned, []);
   assert.equal(needs.textContent.includes("Keyless link row"), true);
   assert.equal(needs.all().some((n) => n.className === "pending-mark"), false);
+});
+
+// The browser runs a link's default action after the click handlers return.
+// The clicked anchor must still be in the rendered list at that point, so the
+// row-hiding render may only run on a later macrotask.
+test("the clicked anchor stays rendered through the click and the hide renders afterwards", async () => {
+  const { needs, posts } = await linkHarness();
+  const act = row(needs, "Review the latch").all().find((n) => n.className === "act");
+  const ev = linkEvent({});
+  fire(act, "click", ev);
+  // Default-action point: every listener has returned, no task has run yet.
+  assert.equal(needs.all().includes(act), true, "anchor detached during the click");
+  assert.equal(needs.textContent.includes("Review the latch"), true, "render ran inside the click handler");
+  assert.equal(posts.length, 1, "POST is sent immediately, not deferred");
+  assert.equal(ev.prevented, false);
+  await nextTask();
+  assert.equal(needs.all().includes(act), false, "deferred render did not run");
+  assert.equal(needs.textContent.includes("Review the latch"), false);
+  assert.match(needs.all().find((n) => n.className === "pending-mark").textContent, /pending · 1/);
 });
