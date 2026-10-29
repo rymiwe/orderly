@@ -253,6 +253,12 @@ PROFILE_VIEW = {
   "repos" => REPOS.map { |repo| repo["name"] }
 }.freeze
 SEARCH_LIMIT = 100
+# GitHub stops a GraphQL query at about 10 s and answers 502 or 504, or an
+# empty body that gh reports as "unexpected end of JSON input". One query for
+# ~100 PRs measured 9-11 s and failed 4 of 5 runs; 25 per query took 1-4 s.
+PR_GQL_BATCH = 20
+GH_TRANSIENT = /HTTP 50[24]|unexpected end of JSON input/
+GH_RETRY_DELAY = 2
 REVIEW_KEEP_LIMIT = 30
 REVIEW_TEAM_KEEP_LIMIT = 15
 REVIEW_REQUEST_GRACE = 3600
@@ -3001,17 +3007,28 @@ class OpsTabServer
     value.to_s.downcase.gsub(/\s+/, " ").strip
   end
 
+  # Runs a gh command that prints JSON. A gateway failure is retried once.
+  def gh_json(label, *args, timeout:, stdin_data: nil)
+    stdout, stderr, status = run_cmd(*args, timeout: timeout, stdin_data: stdin_data)
+    if !status.success? && stderr.match?(GH_TRANSIENT)
+      warn "#{label}: #{stderr.strip}; retrying in #{GH_RETRY_DELAY}s"
+      sleep GH_RETRY_DELAY
+      stdout, stderr, status = run_cmd(*args, timeout: timeout, stdin_data: stdin_data)
+    end
+    raise "#{label}: #{stderr.strip}" unless status.success?
+
+    JSON.parse(stdout)
+  end
+
   def gh_search_prs(filter, json_fields, extra: [])
-    stdout, stderr, status = run_cmd(
+    parsed = gh_json(
+      "gh search prs #{filter}",
       "gh", "search", "prs", filter, "--state=open",
       "--limit", SEARCH_LIMIT.to_s,
       *extra,
       "--json", json_fields,
       timeout: 60
     )
-    raise "gh search prs #{filter}: #{stderr.strip}" unless status.success?
-
-    parsed = JSON.parse(stdout)
     parsed.is_a?(Array) ? parsed : []
   end
 
@@ -3030,6 +3047,10 @@ class OpsTabServer
   end
 
   def graphql_pr_details(hits)
+    hits.each_slice(PR_GQL_BATCH).reduce({}) { |out, batch| out.merge(graphql_pr_batch(batch)) }
+  end
+
+  def graphql_pr_batch(hits)
     aliases = []
     hits.each_with_index do |hit, i|
       nwo = hit.dig("repository", "nameWithOwner").to_s
@@ -3040,14 +3061,7 @@ class OpsTabServer
     end
     query = "query {\n#{aliases.join("\n")}\n  rateLimit { cost remaining limit nodeCount }\n}"
     payload = JSON.generate({ "query" => query })
-    stdout, stderr, status = run_cmd(
-      "gh", "api", "graphql", "--input", "-",
-      timeout: 120,
-      stdin_data: payload
-    )
-    raise "gh api graphql: #{stderr.strip}" unless status.success?
-
-    parsed = JSON.parse(stdout)
+    parsed = gh_json("gh api graphql", "gh", "api", "graphql", "--input", "-", timeout: 120, stdin_data: payload)
     if parsed["errors"].is_a?(Array) && parsed["errors"].any? && parsed["data"].nil?
       raise "gh api graphql: #{parsed["errors"].map { |e| e["message"] }.join("; ")}"
     end
