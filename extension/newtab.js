@@ -687,8 +687,7 @@
       ),
       el("span", null,
         row.title || "",
-        row.detail ? el("br") : null,
-        row.detail ? el("span", { class: "why" }, row.detail) : null
+        row.detail ? el("span", { class: "why", title: row.detail }, row.detail) : null
       ),
       el("span", { class: "age " + bucket }, age),
       el("span", { class: "acts" }, needsActs(row, action), snoozeControls(row))
