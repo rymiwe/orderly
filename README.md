@@ -229,9 +229,9 @@ gh search prs --author=@me --state=open --json number,title,repository,isDraft,u
 gh search prs --review-requested=@me --state=open --json number,title,repository,isDraft,url,updatedAt,createdAt,author
 ```
 
-Then one `gh api graphql` call with aliases (`pr0: repository(...){ pullRequest(number: N) { ... } }`) for CI rollup, unresolved review threads, latest reviews, and review requests.
+Then `gh api graphql` calls with aliases (`pr0: repository(...){ pullRequest(number: N) { ... } }`) for CI rollup, unresolved review threads, latest reviews, and review requests, 20 PRs per call (`PR_GQL_BATCH`). GitHub stops a GraphQL query at about 10 seconds and answers 502 or 504; one call for about 100 PRs ran that long.
 
-If that GraphQL call fails, the last good `prs` card is kept and `error` is set.
+A `gh` call that fails with HTTP 502, HTTP 504 or `unexpected end of JSON input` (gh's message for an empty gateway body) is retried once after 2 seconds. If any call still fails, the last good `prs` card is kept and `error` is set.
 
 `review_requested_team` holds PRs where the request went to a team the viewer belongs to rather than to the viewer. The page shows it collapsed under the review tab, dimmed.
 
