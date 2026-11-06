@@ -14,6 +14,8 @@ jobs:
     # ubuntu-latest is Ubuntu 26.04. setup-ruby publishes no Ruby 3.4.3 build for that image.
     # .ruby-version pins 3.4.3, and that build exists for ubuntu-24.04.
     runs-on: ubuntu-24.04
+    env:
+      TZ: America/Los_Angeles
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Unset ruby-version reads .ruby-version, which pins 3.4.3. No Gemfile, so skip Bundler.
@@ -25,8 +27,7 @@ jobs:
       # test/run.sh has no skip switch. This step uses its ruby and node commands and reads the list below.
       - name: Run tests
         env:
-          CI_SKIP: |
-            tests/burn_card_test.js | pre-existing failure: FAIL muse_out_of_usage_is_a_full_bar_and_names_the_reset out of usage  ·  resets 12am
+          CI_SKIP: ""
         run: |
           set -u
           status=0
