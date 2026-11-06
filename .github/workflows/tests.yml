@@ -14,6 +14,7 @@ jobs:
     # ubuntu-latest is Ubuntu 26.04. setup-ruby publishes no Ruby 3.4.3 build for that image.
     # .ruby-version pins 3.4.3, and that build exists for ubuntu-24.04.
     runs-on: ubuntu-24.04
+    # tests/burn_card_test.js expects the reset clock in Pacific time.
     env:
       TZ: America/Los_Angeles
     steps:
@@ -24,49 +25,4 @@ jobs:
           bundler: none
       # server.rb loads webrick. Ruby 3.4 does not ship it as a default gem.
       - run: gem install webrick
-      # test/run.sh has no skip switch. This step uses its ruby and node commands and reads the list below.
-      - name: Run tests
-        env:
-          CI_SKIP: ""
-        run: |
-          set -u
-          status=0
-          declare -A reasons
-          while IFS= read -r line || [ -n "$line" ]; do
-            case "$line" in
-              ''|\#*) continue ;;
-            esac
-            path="${line%% | *}"
-            reason="${line#* | }"
-            if [ "$path" = "$line" ]; then
-              echo "skip list line has no reason: $line" >&2
-              exit 1
-            fi
-            reasons["$path"]="$reason"
-          done <<< "$CI_SKIP"
-          ruby -v
-          node -v
-          for f in test/*_test.rb tests/*_test.rb test/*_test.js tests/*_test.js; do
-            [ -f "$f" ] || continue
-            if [ -n "${reasons[$f]+x}" ]; then
-              echo "skip $f | ${reasons[$f]}"
-              unset "reasons[$f]"
-              continue
-            fi
-            case "$f" in
-              *.rb) cmd=(ruby "$f") ;;
-              *.js) cmd=(node "$f") ;;
-            esac
-            if out=$("${cmd[@]}" 2>&1); then
-              echo "ok   $f"
-            else
-              status=1
-              echo "FAIL $f"
-              printf '%s\n' "$out" | sed 's/^/     /'
-            fi
-          done
-          if [ "${#reasons[@]}" -ne 0 ]; then
-            echo "skip list names files the suite does not run: ${!reasons[*]}" >&2
-            exit 1
-          fi
-          exit "$status"
+      - run: test/run.sh
